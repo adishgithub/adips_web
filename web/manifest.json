@@ -1,12 +1,12 @@
 {
-    "name": "adips_web",
-    "short_name": "adips_web",
+    "name": "ADIPS",
+    "short_name": "ADIPS",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "Provides secure user account management with authentication, transaction tracking, income/expense summaries, account management, and money transfers. It also supports filtering, searching, sorting, pagination, balance adjustments, archiving, and transaction management for better financial organization.",
-    "orientation": "portrait-primary",
+    "background_color": "#0B1519",
+    "theme_color": "#0B1519",
+    "description": "ADIPS: manage your accounts, transactions and transfers in one place.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

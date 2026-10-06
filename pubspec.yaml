@@ -1,5 +1,5 @@
 name: adips_web
-description: "Provides secure user account management with authentication, transaction tracking, income/expense summaries, account management, and money transfers. It also supports filtering, searching, sorting, pagination, balance adjustments, archiving, and transaction management for better financial organization."
+description: "ADIPS Web: the browser version of the ADIPS personal finance app (accounts, transactions, transfers, categories). Shares its backend, models and services with the mobile app."
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,51 +9,39 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
   cupertino_icons: ^1.0.8
+  get: ^4.7.3
+  get_storage: ^2.1.1
+  http: ^1.2.2
+  intl: ^0.19.0
+  iconsax: ^0.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^6.0.0
 
 flutter:
-
   uses-material-design: true
 
-#---------- LOCAL ASSETS ----------#
-assets:
-  - assets/logos/
-  - assets/images/
-  - assets/images/onboard_images
-  - assets/icons/
-  
-  
-  
+  # NOTE: the old file declared `assets:` at the top level, outside
+  # `flutter:`, so Flutter ignored it. It must live here.
+  assets:
+    - assets/logos/
+    - assets/icons/brands/
+    - assets/images/
+    - assets/images/onboard_images/
 
-  
-  
-
-  
-  
-
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
+  # The theme uses fontFamily 'Poppins' but no font was ever bundled
+  # (mobile has the same gap). To enable it, add the .ttf files under
+  # assets/fonts/ and uncomment:
+  # fonts:
+  #   - family: Poppins
+  #     fonts:
+  #       - asset: assets/fonts/Poppins-Regular.ttf
+  #       - asset: assets/fonts/Poppins-Medium.ttf
+  #         weight: 500
+  #       - asset: assets/fonts/Poppins-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/Poppins-Bold.ttf
+  #         weight: 700

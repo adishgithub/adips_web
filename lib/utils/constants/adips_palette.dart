@@ -1,0 +1,119 @@
+import 'package:adips_web/utils/theme/custom_theme/adips_colors.dart';
+import 'package:flutter/material.dart';
+
+/// Raw colour constants — the single source of truth for every hex value.
+/// Use these directly in const contexts (AppBarTheme, TextStyle, etc.)
+/// Use [AdipsColors] extension only inside widget trees via Theme.of(context).
+class AdipsPalette {
+  AdipsPalette._();
+
+  static const Color shadowColor = Color(0xFF000000);
+
+
+  // ── Light ───────────────────────────────────────
+
+  // Basic color palette
+  static const Color lightBackground = Color(0xFFF8FAFC);
+
+  // logo text colour
+  static const Color lightPrimaryBrandText = Color(0xFF0C4E3A);
+  static const Color lightSubtext = Color(0xFF506575);
+
+  // Text Fields
+  static const Color lightTextField = Color(0xFFFFFFFF);
+  static const Color lightTextFieldPlaceHolderText = Color(0xFFA0B0BA);
+
+  // link buttons
+  static const Color lightLinkButton = Color(0xFF0B5B3E);
+
+  // primary buttons
+  static const Color lightPrimaryButtonBackground = Color(0xFF0F533E);
+  static const Color lightPrimaryButtonText = Color(0xFFFFFFFF);
+
+  // lines
+  static const Color lightLine = Color(0xFFF0F1F3);
+
+  // ── Dark ───────────────────────────────────────
+
+  // Basic color palette
+  static const Color darkBackground = Color(0xFF0B1519);
+
+  // logo text colour
+  static const Color darkPrimaryBrandText = Color(0xFF259962);
+  static const Color darkSubtext = Color(0xFF8596A0);
+
+  // Text Fields
+  static const Color darkTextField = Color(0xFF0F1D22);
+  static const Color darkTextFieldPlaceHolderText = Color(0xFF4B5E67);
+
+  // link buttons
+  static const Color darkLinkButton = Color(0xFF208F5A);
+
+  // primary buttons
+  static const Color darkPrimaryButtonBackground = Color(0xFF258b5b);
+  static const Color darkPrimaryButtonText = Color(0xFFFFFFFF);
+
+  // lines
+  static const Color darkLine = Color(0xFF1A1D22);
+
+
+  // ── Light ──────────────────────────────────────
+  static const Color lightCanvas = Color(0xFFF7F9FC);
+  static const Color lightSurface = Color(0xFFFFFFFF);
+  static const Color lightSubtle = Color(0xFFEEF1F5);
+
+  static const Color lightTextPrimary = Color(0xFF1A2332);
+  static const Color lightTextMuted = Color(0xFF6B7A8D);
+  static const Color lightTextHint = Color(0xFF9CA8B8);
+
+  static const Color lightBorder = Color(0xFFC8D0DC);
+  static const Color lightDivider = Color(0xFFEEF1F5);
+
+  static const Color lightAction = Color(0xFF2C5282);
+  static const Color lightActionHover = Color(0xFF1E3A5F);
+  static const Color lightActionTint = Color(0xFFE6F1FB);
+
+  static const Color lightGain = Color(0xFF1D7A4F);
+  static const Color lightGainTint = Color(0xFFE6F5EE);
+
+  static const Color lightLoss = Color(0xFFC0392B);
+  static const Color lightLossTint = Color(0xFFFCEBEB);
+
+  static const Color lightCaution = Color(0xFF9A6100);
+  static const Color lightCautionTint = Color(0xFFFEF3E2);
+
+  static const Color onboardSecondary = Color(0xFF00E582);
+
+  // ── Dark ───────────────────────────────────────
+  static const Color darkCanvas = Color(0xFF002218);
+  static const Color darkSurface = Color(0xFF1C2840);
+  static const Color darkSubtle = Color(0xFF253045);
+
+  static const Color darkTextPrimary = Color(0xFFF0F4FA);
+  static const Color darkTextMuted = Color(0xFF8A9BB5);
+  static const Color darkTextHint = Color(0xFF4E6080);
+
+  static const Color darkBorder = Color(0xFF2E3F58);
+  static const Color darkDivider = Color(0xFF243048);
+
+  static const Color darkAction = Color(0xFF4A7FBF);
+  static const Color darkActionHover = Color(0xFF5A8FCC);
+  static const Color darkActionTint = Color(0xFF1C2E44);
+
+  static const Color darkGain = Color(0xFF3DBE80);
+  static const Color darkGainTint = Color(0xFF0F2E1F);
+
+  static const Color darkLoss = Color(0xFFE05555);
+  static const Color darkLossTint = Color(0xFF2E1212);
+
+  static const Color darkCaution = Color(0xFFD4922A);
+  static const Color darkCautionTint = Color(0xFF2A1E08);
+
+  // ── Gradient ───────────────────────────────────────
+
+  static const Gradient linearGradient = LinearGradient(
+    begin: Alignment(0.0, 0.0),
+    end: Alignment(0.707, -0.707),
+    colors: [AdipsPalette.darkCanvas, AdipsPalette.darkSubtle],
+  );
+}
