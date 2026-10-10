@@ -1,0 +1,3070 @@
+diff --git a/docs/DEVELOPMENT_PATCHES.md b/docs/DEVELOPMENT_PATCHES.md
+new file mode 100644
+index 0000000..06f9198
+--- /dev/null
++++ b/docs/DEVELOPMENT_PATCHES.md
+@@ -0,0 +1,122 @@
++# ADIPS Web — Development Patch Tracker
++
++Companion to *ADIPS Web Development Plan & Developer Document*.
++The build is delivered as **small sequential patches** (one chat reply each).
++Each patch is a `git apply`-able file; this document is updated by every patch.
++
++## 1. Workflow
++
++```bash
++cd adips_web
++git checkout -b feature/adips-web          # once (plan section 14)
++git checkout -b feature/web-<module>       # per patch
++git apply --index /path/to/000N-<name>.patch
++flutter pub get                            # only needed when pubspec changed
++flutter analyze && flutter test
++flutter run -d chrome
++git commit -m "Patch 0N: <name>"
++```
++
++Rules every patch follows: stays small enough for one reply; shared code is
++**copied from `adips_app` by `tools/sync_shared.sh`** (not retyped, so no
++business-logic drift); UI-only code lives under `lib/web/`; this file is updated.
++
++## 2. Findings from the audit (Phase 0)
++
++| # | Finding | Impact | Handled in |
++|---|---------|--------|-----------|
++| 1 | `adips_web` was the untouched Flutter counter template | Everything built from scratch | Patch 01 |
++| 2 | `pubspec.yaml` had `assets:` **outside** `flutter:` | No asset was registered | Patch 01 (fixed) |
++| 3 | Backend has **no CORS middleware** (`gin.Default()` only) | A browser on another origin cannot call the API at all | Patch 02 (backend patch B01) |
++| 4 | Mobile `AdipsHttpHelper` authenticates by setting a `Cookie` header | Browsers forbid scripts from setting `Cookie` → every call would be 401 | Patch 02: web client sends `Authorization: <jwt>` (backend middleware already accepts this fallback, raw token, no `Bearer`) |
++| 5 | Mobile uses GetX for state **and** navigation (`Get.offAllNamed`, `Get.snackbar`) | Controllers that navigate/toast can't be copied verbatim | Reuse services/models as-is; adapt controllers (router/toast via web adapters) |
++| 6 | Backend base URL is Render free tier (cold start 20–50 s) | Needs long first-load timeouts and a clear "waking up" state | Patch 02 |
++| 7 | Theme references font `Poppins` but no font is bundled in `adips_app` | Falls back to the default font on both platforms | Open question (§6) |
++
++Backend API (all under `/api/v1`, envelope `{success,message,data,meta?}`):
++users (signup, login, logout, validate), accounts (CRUD, summary, reorder,
++archive/unarchive, delete-preview, adjust), transactions (CRUD, summary),
++transfers (by group UUID), categories (CRUD, reorder), transaction-types
++(CRUD), settings (get/patch).
++
++## 3. Decisions
++
++| Decision | Choice | Why |
++|----------|--------|-----|
++| State / DI | GetX (`get`, `get_storage`) | Same as mobile → shared controllers/services reusable |
++| Routing | `go_router` with a `ShellRoute` | Real URLs, deep links, refresh-safe, persistent sidebar (plan §7, §10) |
++| Notifications | `ScaffoldMessenger` snackbars (Patch 03+) | `Get.snackbar` needs `GetMaterialApp`, which conflicts with `go_router` |
++| Shared code | Copy via `tools/sync_shared.sh`, import rewrite `package:adips/utils/theme→adips_web/core/theme`, `…/constants→core/constants` | Plan §9 "reuse, don't duplicate" without a package refactor of the mobile repo |
++| Default theme | Dark (persisted toggle) | Plan §8: dark is the primary identity. Mobile follows system — change `ThemeController` if you want parity |
++| Icons | Material icons in the shell | Mobile barely uses iconsax; avoids an extra dependency |
++
++## 4. Patch roadmap & status
++
++Sizing target: one patch ≈ 8–15 authored files, ≤ ~900 authored lines.
++
++| Patch | Name | Plan phase | Repo | Status |
++|-------|------|-----------|------|--------|
++| **01** | Web foundation: theme, responsive shell, routing, placeholders | 0, 1 | web | ✅ **Delivered** |
++| 02 | Core networking: models + services sync, web HTTP client, session storage, **backend CORS (B01)** | 1/2 | web + backend | ⬜ Next |
++| 03 | Authentication: login, register, onboarding, route guard, real logout | 2 | web | ⬜ |
++| 04 | Dashboard A: total balance, summary stat cards, account cards | 3 | web | ⬜ |
++| 05 | Dashboard B: date/sort filters, search, recent transactions | 3 | web | ⬜ |
++| 06 | Transactions list/table with search, filter, sort, pagination | 4 | web | ⬜ |
++| 07 | Add/edit transaction dialog, details page, delete confirm | 4 | web | ⬜ |
++| 08 | Transfers: form dialog + validation | 5 | web | ⬜ |
++| 09 | Accounts: list + add/edit dialog (icon/colour/type/currency) | 6 | web | ⬜ |
++| 10 | Accounts lifecycle: archive, default, adjust balance, delete preview, reorder | 6 | web | ⬜ |
++| 11 | Categories: list, filter by type, add/edit, icon/colour, reorder | 7 | web | ⬜ |
++| 12 | Transaction types | 7 | web | ⬜ |
++| 13 | Settings + Profile + about/version | 8 | web | ⬜ |
++| 14 | Responsive/accessibility QA fixes, overflow pass | 9 | web | ⬜ |
++| 15 | Release: env config, build, deploy rewrite rules, smoke checklist | 10 | web | ⬜ |
++
++Plan §13 immediate tasks → Patch 01 covers tasks 1–5 (baseline, dependency
++comparison, shared theme/constants, WebShell, responsive routing). Tasks 6–11
++map to Patches 03–15.
++
++## 5. Patch 01 — Web foundation  ✅
++
++**Adds**
++- `pubspec.yaml`: `get`, `get_storage`, `go_router`, `flutter_web_plugins`; assets block fixed.
++- `web/index.html`, `web/manifest.json`: ADIPS branding, dark boot background, viewport.
++- `tools/sync_shared.sh` (group `theme`) → copied `lib/core/constants/{adips_palette,sizes,image_strings,text_strings}.dart` and `lib/core/theme/**` (20 files, imports rewritten, otherwise identical to mobile).
++- `lib/core/responsive/breakpoints.dart` (768 / 1200), `lib/core/theme/theme_controller.dart`, `lib/core/constants/web_assets.dart`.
++- `lib/routes/app_routes.dart`, `app_router.dart`: all plan routes, `/` → `/dashboard`, 404 page, no-transition shell pages.
++- `lib/web/layout/`: `web_shell`, `web_sidebar` (full / icon-rail / drawer), `web_header` (title, Add menu, theme toggle, profile menu), `responsive_layout`, `nav_items`.
++- Placeholders: every module page shows "built in Patch NN"; `/login`, `/register`, `/onboarding` are temporary stubs.
++- `test/widget_test.dart`: breakpoints, nav matching, sidebar widget test (replaces the template counter test).
++
++**Temporary items to remove later**
++- `_logout` in `web_shell.dart` just navigates to `/login` → Patch 03.
++- `AuthPlaceholderPage` "Continue to dashboard" button → Patch 03.
++- `PagePlaceholder` usages → replaced module by module.
++
++**Hosting note (path URLs):** the app uses `/dashboard`, not `/#/dashboard`.
++Your host must rewrite unknown paths to `index.html` (Patch 15 adds exact
++Render/Netlify/Firebase rules). `flutter run -d chrome` already does this.
++
++**Verification checklist**
++- [ ] `flutter pub get && flutter analyze && flutter test`
++- [ ] Chrome ≥1200px: full sidebar, items highlight, URL changes, refresh keeps the page
++- [ ] 768–1199px: icon rail with tooltips · <768px: hamburger opens drawer
++- [ ] Theme toggle switches and survives reload
++- [ ] `/transactions/42` shows "Transaction #42"; `/nonsense` shows the 404 page
++
++> Honesty note: this environment had no Flutter SDK, so Patch 01 was checked
++> statically only (all imports resolve, brackets balanced, patch applies
++> cleanly to a fresh clone) — **not compiled**. If `flutter analyze` reports
++> anything, paste it and I'll fix it first in the next reply.
++
++## 6. Open questions
++
++1. Poppins: bundle the font in both apps (recommended) or accept the fallback?
++2. Default web theme: dark (current) or follow system like mobile?
++3. Deploy target (Render static site, Netlify, Firebase, other)? Affects Patch 15 and the CORS allow-list in Patch 02.
++
++## 7. Change log
++
++| Date | Patch | Notes |
++|------|-------|-------|
++| 2026-10-10 | 01 | Foundation delivered |
+diff --git a/lib/app.dart b/lib/app.dart
+new file mode 100644
+index 0000000..169635f
+--- /dev/null
++++ b/lib/app.dart
+@@ -0,0 +1,24 @@
++import 'package:adips_web/core/theme/adips_app_theme.dart';
++import 'package:adips_web/core/theme/theme_controller.dart';
++import 'package:adips_web/routes/app_router.dart';
++import 'package:flutter/material.dart';
++import 'package:get/get.dart';
++
++class AdipsWebApp extends StatelessWidget {
++  const AdipsWebApp({super.key});
++
++  @override
++  Widget build(BuildContext context) {
++    final themeController = ThemeController.to;
++    return Obx(
++      () => MaterialApp.router(
++        title: 'ADIPS',
++        debugShowCheckedModeBanner: false,
++        themeMode: themeController.mode.value,
++        theme: AdipsAppTheme.lightTheme,
++        darkTheme: AdipsAppTheme.darkTheme,
++        routerConfig: AppRouter.router,
++      ),
++    );
++  }
++}
+diff --git a/lib/core/constants/adips_palette.dart b/lib/core/constants/adips_palette.dart
+new file mode 100644
+index 0000000..e151c82
+--- /dev/null
++++ b/lib/core/constants/adips_palette.dart
+@@ -0,0 +1,119 @@
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:flutter/material.dart';
++
++/// Raw colour constants — the single source of truth for every hex value.
++/// Use these directly in const contexts (AppBarTheme, TextStyle, etc.)
++/// Use [AdipsColors] extension only inside widget trees via Theme.of(context).
++class AdipsPalette {
++  AdipsPalette._();
++
++  static const Color shadowColor = Color(0xFF000000);
++
++
++  // ── Light ───────────────────────────────────────
++
++  // Basic color palette
++  static const Color lightBackground = Color(0xFFF8FAFC);
++
++  // logo text colour
++  static const Color lightPrimaryBrandText = Color(0xFF0C4E3A);
++  static const Color lightSubtext = Color(0xFF506575);
++
++  // Text Fields
++  static const Color lightTextField = Color(0xFFFFFFFF);
++  static const Color lightTextFieldPlaceHolderText = Color(0xFFA0B0BA);
++
++  // link buttons
++  static const Color lightLinkButton = Color(0xFF0B5B3E);
++
++  // primary buttons
++  static const Color lightPrimaryButtonBackground = Color(0xFF0F533E);
++  static const Color lightPrimaryButtonText = Color(0xFFFFFFFF);
++
++  // lines
++  static const Color lightLine = Color(0xFFF0F1F3);
++
++  // ── Dark ───────────────────────────────────────
++
++  // Basic color palette
++  static const Color darkBackground = Color(0xFF0B1519);
++
++  // logo text colour
++  static const Color darkPrimaryBrandText = Color(0xFF259962);
++  static const Color darkSubtext = Color(0xFF8596A0);
++
++  // Text Fields
++  static const Color darkTextField = Color(0xFF0F1D22);
++  static const Color darkTextFieldPlaceHolderText = Color(0xFF4B5E67);
++
++  // link buttons
++  static const Color darkLinkButton = Color(0xFF208F5A);
++
++  // primary buttons
++  static const Color darkPrimaryButtonBackground = Color(0xFF258b5b);
++  static const Color darkPrimaryButtonText = Color(0xFFFFFFFF);
++
++  // lines
++  static const Color darkLine = Color(0xFF1A1D22);
++
++
++  // ── Light ──────────────────────────────────────
++  static const Color lightCanvas = Color(0xFFF7F9FC);
++  static const Color lightSurface = Color(0xFFFFFFFF);
++  static const Color lightSubtle = Color(0xFFEEF1F5);
++
++  static const Color lightTextPrimary = Color(0xFF1A2332);
++  static const Color lightTextMuted = Color(0xFF6B7A8D);
++  static const Color lightTextHint = Color(0xFF9CA8B8);
++
++  static const Color lightBorder = Color(0xFFC8D0DC);
++  static const Color lightDivider = Color(0xFFEEF1F5);
++
++  static const Color lightAction = Color(0xFF2C5282);
++  static const Color lightActionHover = Color(0xFF1E3A5F);
++  static const Color lightActionTint = Color(0xFFE6F1FB);
++
++  static const Color lightGain = Color(0xFF1D7A4F);
++  static const Color lightGainTint = Color(0xFFE6F5EE);
++
++  static const Color lightLoss = Color(0xFFC0392B);
++  static const Color lightLossTint = Color(0xFFFCEBEB);
++
++  static const Color lightCaution = Color(0xFF9A6100);
++  static const Color lightCautionTint = Color(0xFFFEF3E2);
++
++  static const Color onboardSecondary = Color(0xFF00E582);
++
++  // ── Dark ───────────────────────────────────────
++  static const Color darkCanvas = Color(0xFF002218);
++  static const Color darkSurface = Color(0xFF1C2840);
++  static const Color darkSubtle = Color(0xFF253045);
++
++  static const Color darkTextPrimary = Color(0xFFF0F4FA);
++  static const Color darkTextMuted = Color(0xFF8A9BB5);
++  static const Color darkTextHint = Color(0xFF4E6080);
++
++  static const Color darkBorder = Color(0xFF2E3F58);
++  static const Color darkDivider = Color(0xFF243048);
++
++  static const Color darkAction = Color(0xFF4A7FBF);
++  static const Color darkActionHover = Color(0xFF5A8FCC);
++  static const Color darkActionTint = Color(0xFF1C2E44);
++
++  static const Color darkGain = Color(0xFF3DBE80);
++  static const Color darkGainTint = Color(0xFF0F2E1F);
++
++  static const Color darkLoss = Color(0xFFE05555);
++  static const Color darkLossTint = Color(0xFF2E1212);
++
++  static const Color darkCaution = Color(0xFFD4922A);
++  static const Color darkCautionTint = Color(0xFF2A1E08);
++
++  // ── Gradient ───────────────────────────────────────
++
++  static const Gradient linearGradient = LinearGradient(
++    begin: Alignment(0.0, 0.0),
++    end: Alignment(0.707, -0.707),
++    colors: [AdipsPalette.darkCanvas, AdipsPalette.darkSubtle],
++  );
++}
+diff --git a/lib/core/constants/image_strings.dart b/lib/core/constants/image_strings.dart
+new file mode 100644
+index 0000000..0e76196
+--- /dev/null
++++ b/lib/core/constants/image_strings.dart
+@@ -0,0 +1,20 @@
++class AdipsImages {
++  //App Logos
++  static const String darkAppLogo = "assets/logos/dark_full_logo.png";
++  static const String lightAppLogo = "assets/logos/light_full_logo.png";
++  static const String darkFullLogo = "assets/logos/full_logo_dark.png";
++  static const String lightFullLogo = "assets/logos/full_logo_light.png";
++
++
++  //onboarding images
++  static const String onBoardingImageLight1 = "assets/images/onboard_images/onboard_screen1_light.png";
++  static const String onBoardingImageDark1 = "assets/images/onboard_images/onboard_screen1_dark.png";
++  static const String onBoardingImageLight2 = "assets/images/onboard_images/onboard_screen2_light.png";
++  static const String onBoardingImageDark2 = "assets/images/onboard_images/onboard_screen2_dark.png";
++  static const String onBoardingImageLight3 = "assets/images/onboard_images/onboard_screen3_light.png";
++  static const String onBoardingImageDark3 = "assets/images/onboard_images/onboard_screen3_dark.png";
++
++  static const String backgroundImageGraphicsTop = "assets/images/login_signup_background_top.png";
++  static const String backgroundImageGraphicsBottom = "assets/images/login_signup_background_bottom.png";
++
++}
+\ No newline at end of file
+diff --git a/lib/core/constants/sizes.dart b/lib/core/constants/sizes.dart
+new file mode 100644
+index 0000000..134f654
+--- /dev/null
++++ b/lib/core/constants/sizes.dart
+@@ -0,0 +1,85 @@
++class AdipsSizes {
++  // Padding and Margin sizes
++  static const double xs = 5.0;
++  static const double sm = 10.0;
++  static const double md = 16.0;
++  static const double lg = 24.0;
++  static const double xl = 32.0;
++
++  // padding
++  static const double minPaddingTop = 50;
++  static const double minPaddingLeft = 20;
++  static const double minPaddingRight = 20;
++  static const double minPaddingBottom = 40;
++  static const double minPaddingAll = 20;
++
++  //Icon Sizes
++  static const double iconXs = 12.0;
++  static const double iconSm = 16.0;
++  static const double iconMd = 24.0;
++  static const double iconLg = 32.0;
++
++  //Logo Sizes
++  static const double logoXs = 50;
++  static const double logoSm = 100;
++  static const double logoMd = 150;
++
++  //Font sizes
++  static const double fontSizesEs = 12.0;
++  static const double fontSizesSm = 14.0;
++  static const double fontSizesMd = 16.0;
++  static const double fontSizesLg = 18.0;
++  static const double fontSizesEl = 20.0;
++  static const double fontSizesXxl = 22.0;
++
++  //button sizes
++  static const double buttonHeight = 18.0;
++  static const double buttonRadius = 5.0;
++  static const double buttonWidth = 120.0;
++  static const double buttonElevation = 4.0;
++
++  //AppBar Height
++  static const double appBarHeight = 70.0;
++
++  //image sizes
++  static const double imageThumbSize = 80.0;
++
++  //default spacing between sections
++  static const double spaceBtwFontsEs = 2;
++  static const double spaceBtwFontsSm = 5;
++  static const double defaultSpace = 24.0;
++  static const double spaceBtwItems = 16.0;
++  static const double spaceBtwSections = 32.0;
++
++  //border radius
++  // All "card" style radii are unified to match the Account Balance
++  // card on the home screen (AdipsSizes.borderRadiusSm), so sheets,
++  // tiles, and containers across the app read as one consistent
++  // design instead of a mix of 8/10/12/16px corners. Kept as
++  // separate named constants (rather than collapsing to one) so call
++  // sites stay descriptive and can diverge again later if needed.
++  static const double borderRadiusSm = 5.0;
++  static const double borderRadiusMd = 5.0;
++  static const double borderRadiusLg = 5.0;
++
++  //divider height
++  static const double dividerHeight = 1.0;
++
++  //input fields
++  static const double inputFieldRadius = 5.0;
++  static const double inputFieldContentPadding = 10;
++  static const double spaceBtwInputFields = 20.0;
++
++  //card sizes — unified with borderRadiusSm, see note above.
++  static const double cardRadiusLg = 5.0;
++  static const double cardRadiusMg = 5.0;
++  static const double cardRadiusSm = 5.0;
++  static const double cardRadiusXs = 5.0;
++  static const double cardElevation = 2.0;
++
++//image carousel height
++
++//loading indicator height
++
++//grid view spacing
++}
+\ No newline at end of file
+diff --git a/lib/core/constants/text_strings.dart b/lib/core/constants/text_strings.dart
+new file mode 100644
+index 0000000..ef57ad4
+--- /dev/null
++++ b/lib/core/constants/text_strings.dart
+@@ -0,0 +1,15 @@
++// This class contains all the app text string.
++
++class AdipsText {
++  // onboarding texts
++  static const String onBoardingTitle1 = "Financial Intelligence, ";
++  static const String onBoardingTitle1a = "Simplified";
++  static const String onBoardingTitle2 = "Track Every Penny ";
++  static const String onBoardingTitle2a = "That Matters";
++  static const String onBoardingTitle3 = "Make Confident ";
++  static const String onBoardingTitle3a = "Decisions";
++
++  static const String onBoardingSubTitle1 = "Connect your numbers and uncover the insights that drive better business decisions.";
++  static const String onBoardingSubTitle2 = "Organize income, expenses, and business activity with complete visibility.";
++  static const String onBoardingSubTitle3 = "Real-time analytics help you identify trends, control spending, and grow sustainably.";
++}
+\ No newline at end of file
+diff --git a/lib/core/constants/web_assets.dart b/lib/core/constants/web_assets.dart
+new file mode 100644
+index 0000000..0bee05c
+--- /dev/null
++++ b/lib/core/constants/web_assets.dart
+@@ -0,0 +1,14 @@
++/// Web-only asset paths. (adips_app's `AdipsImages` is synced from the
++/// mobile app and must not be edited here, so web additions live in this file.)
++class WebAssets {
++  WebAssets._();
++
++  /// Horizontal logo. The `_dark` file is the light artwork meant for
++  /// DARK backgrounds, and vice versa.
++  static const String horizontalLogoOnDark = 'assets/images/Horizontal_logo_dark.png';
++  static const String horizontalLogoOnLight = 'assets/images/Horizontal_logo_light.png';
++
++  /// Square symbol-only logo (used by the collapsed sidebar rail).
++  static const String symbolOnDark = 'assets/logos/dark_logo.png';
++  static const String symbolOnLight = 'assets/logos/light_logo.png';
++}
+diff --git a/lib/core/responsive/breakpoints.dart b/lib/core/responsive/breakpoints.dart
+new file mode 100644
+index 0000000..129eb23
+--- /dev/null
++++ b/lib/core/responsive/breakpoints.dart
+@@ -0,0 +1,34 @@
++/// Width classes from the ADIPS Web plan (section 7).
++///
++/// * [ScreenSize.expanded] >= 1200px: full sidebar + multi-column content
++/// * [ScreenSize.medium]   768-1199px: icon rail + reduced grid columns
++/// * [ScreenSize.compact]  < 768px: drawer navigation + stacked content
++enum ScreenSize { compact, medium, expanded }
++
++class Breakpoints {
++  Breakpoints._();
++
++  static const double medium = 768;
++  static const double expanded = 1200;
++
++  /// Page content is centred and never wider than this.
++  static const double contentMaxWidth = 1400;
++
++  static ScreenSize fromWidth(double width) {
++    if (width >= expanded) return ScreenSize.expanded;
++    if (width >= medium) return ScreenSize.medium;
++    return ScreenSize.compact;
++  }
++
++  /// Outer padding of the page content area for a given width class.
++  static double contentPadding(ScreenSize size) {
++    switch (size) {
++      case ScreenSize.compact:
++        return 16;
++      case ScreenSize.medium:
++        return 24;
++      case ScreenSize.expanded:
++        return 32;
++    }
++  }
++}
+diff --git a/lib/core/theme/adips_app_theme.dart b/lib/core/theme/adips_app_theme.dart
+new file mode 100644
+index 0000000..1638e04
+--- /dev/null
++++ b/lib/core/theme/adips_app_theme.dart
+@@ -0,0 +1,101 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_app_bar_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_bottom_navigation_bar_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_card_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_checkbox_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_chip_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_divider_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_elevated_button_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_input_decoration_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_list_tile_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_outlined_button_theme.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_switch_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_tab_bar_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_text_button_theme.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_text_theme.dart';
++
++class AdipsAppTheme {
++  AdipsAppTheme._();
++
++  static ThemeData lightTheme = ThemeData(
++    useMaterial3: true,
++    fontFamily: 'Poppins',
++    brightness: Brightness.light,
++    primaryColor: AdipsPalette.lightAction,
++    scaffoldBackgroundColor: AdipsPalette.lightCanvas,
++    colorScheme: const ColorScheme.light(
++      primary: AdipsPalette.lightAction,
++      onPrimary: Colors.white,
++      primaryContainer: AdipsPalette.lightActionTint,
++      onPrimaryContainer: AdipsPalette.lightAction,
++      secondary: AdipsPalette.lightTextMuted,
++      onSecondary: Colors.white,
++      surface: AdipsPalette.lightSurface,
++      onSurface: AdipsPalette.lightTextPrimary,
++      surfaceContainerHighest: AdipsPalette.lightSubtle,
++      error: AdipsPalette.lightLoss,
++      onError: Colors.white,
++      errorContainer: AdipsPalette.lightLossTint,
++      onErrorContainer: AdipsPalette.lightLoss,
++      outline: AdipsPalette.lightBorder,
++      outlineVariant: AdipsPalette.lightDivider,
++    ),
++    extensions: const [AdipsColors.light],
++    textTheme: AdipsTextTheme.lightTextTheme,
++    appBarTheme: AdipsAppBar.lightAppBarTheme,
++    cardTheme: AdipsCardTheme.lightCardTheme,
++    elevatedButtonTheme: AdipsElevatedButtonTheme.lightElevatedButtonTheme,
++    outlinedButtonTheme: AdipsOutlinedButtonTheme.lightOutlinedButtonTheme,
++    textButtonTheme: AdipsTextButtonTheme.lightTextButtonTheme,
++    inputDecorationTheme: AdipsInputDecorationTheme.lightInputDecorationTheme,
++    chipTheme: AdipsChipTheme.lightChipTheme,
++    dividerTheme: AdipsDividerTheme.lightDividerTheme,
++    switchTheme: AdipsSwitchTheme.lightSwitchTheme,
++    checkboxTheme: AdipsCheckboxTheme.lightCheckboxTheme,
++    listTileTheme: AdipsListTileTheme.lightListTileTheme,
++    tabBarTheme: AdipsTabBar.lightTabBarTheme,
++    bottomNavigationBarTheme: AdipsBottomNavigationBarTheme.lightBottomNavTheme,
++  );
++
++  static ThemeData darkTheme = ThemeData(
++    useMaterial3: true,
++    fontFamily: 'Poppins',
++    brightness: Brightness.dark,
++    primaryColor: AdipsPalette.darkAction,
++    scaffoldBackgroundColor: AdipsPalette.darkCanvas,
++    colorScheme: const ColorScheme.dark(
++      primary: AdipsPalette.darkAction,
++      onPrimary: Colors.white,
++      primaryContainer: AdipsPalette.darkActionTint,
++      onPrimaryContainer: AdipsPalette.darkAction,
++      secondary: AdipsPalette.darkTextMuted,
++      onSecondary: Colors.white,
++      surface: AdipsPalette.darkSurface,
++      onSurface: AdipsPalette.darkTextPrimary,
++      surfaceContainerHighest: AdipsPalette.darkSubtle,
++      error: AdipsPalette.darkLoss,
++      onError: Colors.white,
++      errorContainer: AdipsPalette.darkLossTint,
++      onErrorContainer: AdipsPalette.darkLoss,
++      outline: AdipsPalette.darkBorder,
++      outlineVariant: AdipsPalette.darkDivider,
++    ),
++    extensions: const [AdipsColors.dark],
++    textTheme: AdipsTextTheme.darkTextTheme,
++    appBarTheme: AdipsAppBar.darkAppBarTheme,
++    cardTheme: AdipsCardTheme.darkCardTheme,
++    elevatedButtonTheme: AdipsElevatedButtonTheme.darkElevatedButtonTheme,
++    outlinedButtonTheme: AdipsOutlinedButtonTheme.darkOutlinedButtonTheme,
++    textButtonTheme: AdipsTextButtonTheme.darkTextButtonTheme,
++    inputDecorationTheme: AdipsInputDecorationTheme.darkInputDecorationTheme,
++    chipTheme: AdipsChipTheme.darkChipTheme,
++    dividerTheme: AdipsDividerTheme.darkDividerTheme,
++    switchTheme: AdipsSwitchTheme.darkSwitchTheme,
++    checkboxTheme: AdipsCheckboxTheme.darkCheckboxTheme,
++    listTileTheme: AdipsListTileTheme.darkListTileTheme,
++    tabBarTheme: AdipsTabBar.darkTabBarTheme,
++    bottomNavigationBarTheme: AdipsBottomNavigationBarTheme.darkBottomNavTheme,
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_app_bar_theme.dart b/lib/core/theme/custom_theme/adips_app_bar_theme.dart
+new file mode 100644
+index 0000000..195b722
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_app_bar_theme.dart
+@@ -0,0 +1,59 @@
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsAppBar {
++  AdipsAppBar._();
++
++  static const lightAppBarTheme = AppBarTheme(
++    backgroundColor: AdipsPalette.lightSurface,
++    foregroundColor: AdipsPalette.lightTextPrimary,
++    elevation: 0,
++    scrolledUnderElevation: 0.5,
++    centerTitle: false,
++    titleTextStyle: TextStyle(
++      color: AdipsPalette.lightTextPrimary,
++      fontSize: 17,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++      letterSpacing: -0.2,
++    ),
++    iconTheme: IconThemeData(color: AdipsPalette.lightTextPrimary, size: 22),
++    actionsIconTheme: IconThemeData(
++      color: AdipsPalette.lightTextMuted,
++      size: 22,
++    ),
++    shadowColor: Colors.transparent,
++    systemOverlayStyle: SystemUiOverlayStyle(
++      statusBarColor: Colors.transparent,
++      statusBarIconBrightness: Brightness.dark,
++      statusBarBrightness: Brightness.light,
++    ),
++  );
++
++  static const darkAppBarTheme = AppBarTheme(
++    backgroundColor: AdipsPalette.darkSurface,
++    foregroundColor: AdipsPalette.darkTextPrimary,
++    elevation: 0,
++    scrolledUnderElevation: 0.5,
++    centerTitle: false,
++    titleTextStyle: TextStyle(
++      color: AdipsPalette.darkTextPrimary,
++      fontSize: 17,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++      letterSpacing: -0.2,
++    ),
++    iconTheme: IconThemeData(color: AdipsPalette.darkTextPrimary, size: 22),
++    actionsIconTheme: IconThemeData(
++      color: AdipsPalette.darkTextMuted,
++      size: 22,
++    ),
++    shadowColor: Colors.transparent,
++    systemOverlayStyle: SystemUiOverlayStyle(
++      statusBarColor: Colors.transparent,
++      statusBarIconBrightness: Brightness.light,
++      statusBarBrightness: Brightness.dark,
++    ),
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_bottom_navigation_bar_theme.dart b/lib/core/theme/custom_theme/adips_bottom_navigation_bar_theme.dart
+new file mode 100644
+index 0000000..687954d
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_bottom_navigation_bar_theme.dart
+@@ -0,0 +1,56 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsBottomNavigationBarTheme {
++  AdipsBottomNavigationBarTheme._();
++
++  static const lightBottomNavTheme = BottomNavigationBarThemeData(
++    backgroundColor: AdipsPalette.lightSurface,
++    selectedItemColor: AdipsPalette.lightAction,
++    unselectedItemColor: AdipsPalette.lightTextMuted,
++    showSelectedLabels: true,
++    showUnselectedLabels: true,
++    elevation: 0,
++    type: BottomNavigationBarType.fixed,
++    selectedLabelStyle: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++    ),
++    unselectedLabelStyle: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w400,
++      fontFamily: 'Poppins',
++    ),
++    selectedIconTheme: IconThemeData(size: 22, color: AdipsPalette.lightAction),
++    unselectedIconTheme: IconThemeData(
++      size: 22,
++      color: AdipsPalette.lightTextMuted,
++    ),
++  );
++
++  static const darkBottomNavTheme = BottomNavigationBarThemeData(
++    backgroundColor: AdipsPalette.darkSurface,
++    selectedItemColor: AdipsPalette.darkAction,
++    unselectedItemColor: AdipsPalette.darkTextMuted,
++    showSelectedLabels: true,
++    showUnselectedLabels: true,
++    elevation: 0,
++    type: BottomNavigationBarType.fixed,
++    selectedLabelStyle: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++    ),
++    unselectedLabelStyle: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w400,
++      fontFamily: 'Poppins',
++    ),
++    selectedIconTheme: IconThemeData(size: 22, color: AdipsPalette.darkAction),
++    unselectedIconTheme: IconThemeData(
++      size: 22,
++      color: AdipsPalette.darkTextMuted,
++    ),
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_card_theme.dart b/lib/core/theme/custom_theme/adips_card_theme.dart
+new file mode 100644
+index 0000000..97037c1
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_card_theme.dart
+@@ -0,0 +1,29 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsCardTheme {
++  AdipsCardTheme._();
++
++  static CardThemeData lightCardTheme = CardThemeData(
++    color: AdipsPalette.lightSurface,
++    surfaceTintColor: Colors.transparent,
++    elevation: 0,
++    margin: EdgeInsets.zero,
++    shape: RoundedRectangleBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      side: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++    ),
++  );
++
++  static CardThemeData darkCardTheme = CardThemeData(
++    color: AdipsPalette.darkSurface,
++    surfaceTintColor: Colors.transparent,
++    elevation: 0,
++    margin: EdgeInsets.zero,
++    shape: RoundedRectangleBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      side: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_checkbox_theme.dart b/lib/core/theme/custom_theme/adips_checkbox_theme.dart
+new file mode 100644
+index 0000000..c8774d8
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_checkbox_theme.dart
+@@ -0,0 +1,30 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsCheckboxTheme {
++  AdipsCheckboxTheme._();
++
++  static CheckboxThemeData lightCheckboxTheme = CheckboxThemeData(
++    checkColor: WidgetStateProperty.all(Colors.white),
++    fillColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.lightAction
++          : AdipsPalette.lightSubtle,
++    ),
++    side: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
++    overlayColor: WidgetStateProperty.all(AdipsPalette.lightActionTint),
++  );
++
++  static CheckboxThemeData darkCheckboxTheme = CheckboxThemeData(
++    checkColor: WidgetStateProperty.all(AdipsPalette.darkCanvas),
++    fillColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.darkAction
++          : AdipsPalette.darkSubtle,
++    ),
++    side: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
++    overlayColor: WidgetStateProperty.all(AdipsPalette.darkActionTint),
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_chip_theme.dart b/lib/core/theme/custom_theme/adips_chip_theme.dart
+new file mode 100644
+index 0000000..25fae61
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_chip_theme.dart
+@@ -0,0 +1,48 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsChipTheme {
++  AdipsChipTheme._();
++
++  static ChipThemeData lightChipTheme = ChipThemeData(
++    backgroundColor: AdipsPalette.lightSubtle,
++    selectedColor: AdipsPalette.lightActionTint,
++    disabledColor: AdipsPalette.lightDivider,
++    labelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.lightTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    secondaryLabelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.lightAction,
++      fontFamily: 'Poppins',
++    ),
++    side: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(99)),
++    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
++    elevation: 0,
++    pressElevation: 0,
++  );
++
++  static ChipThemeData darkChipTheme = ChipThemeData(
++    backgroundColor: AdipsPalette.darkSubtle,
++    selectedColor: AdipsPalette.darkActionTint,
++    disabledColor: AdipsPalette.darkDivider,
++    labelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.darkTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    secondaryLabelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.darkAction,
++      fontFamily: 'Poppins',
++    ),
++    side: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(99)),
++    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
++    elevation: 0,
++    pressElevation: 0,
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_colors.dart b/lib/core/theme/custom_theme/adips_colors.dart
+new file mode 100644
+index 0000000..2b6a906
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_colors.dart
+@@ -0,0 +1,150 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++/// ThemeExtension that exposes semantic colour tokens inside widget trees.
++///
++/// Usage:
++///   final c = Theme.of(context).extension<AdipsColors>()!;
++///   Text('+3.4%', style: TextStyle(color: c.gain));
++class AdipsColors extends ThemeExtension<AdipsColors> {
++  const AdipsColors({
++    required this.canvas,
++    required this.surface,
++    required this.subtle,
++    required this.textPrimary,
++    required this.textMuted,
++    required this.textHint,
++    required this.border,
++    required this.divider,
++    required this.action,
++    required this.actionHover,
++    required this.actionTint,
++    required this.gain,
++    required this.gainTint,
++    required this.loss,
++    required this.lossTint,
++    required this.caution,
++    required this.cautionTint,
++  });
++
++  final Color canvas;
++  final Color surface;
++  final Color subtle;
++  final Color textPrimary;
++  final Color textMuted;
++  final Color textHint;
++  final Color border;
++  final Color divider;
++  final Color action;
++  final Color actionHover;
++  final Color actionTint;
++  final Color gain;
++  final Color gainTint;
++  final Color loss;
++  final Color lossTint;
++  final Color caution;
++  final Color cautionTint;
++
++  static const light = AdipsColors(
++    canvas: AdipsPalette.lightCanvas,
++    surface: AdipsPalette.lightSurface,
++    subtle: AdipsPalette.lightSubtle,
++    textPrimary: AdipsPalette.lightTextPrimary,
++    textMuted: AdipsPalette.lightTextMuted,
++    textHint: AdipsPalette.lightTextHint,
++    border: AdipsPalette.lightBorder,
++    divider: AdipsPalette.lightDivider,
++    action: AdipsPalette.lightAction,
++    actionHover: AdipsPalette.lightActionHover,
++    actionTint: AdipsPalette.lightActionTint,
++    gain: AdipsPalette.lightGain,
++    gainTint: AdipsPalette.lightGainTint,
++    loss: AdipsPalette.lightLoss,
++    lossTint: AdipsPalette.lightLossTint,
++    caution: AdipsPalette.lightCaution,
++    cautionTint: AdipsPalette.lightCautionTint,
++  );
++
++  static const dark = AdipsColors(
++    canvas: AdipsPalette.darkCanvas,
++    surface: AdipsPalette.darkSurface,
++    subtle: AdipsPalette.darkSubtle,
++    textPrimary: AdipsPalette.darkTextPrimary,
++    textMuted: AdipsPalette.darkTextMuted,
++    textHint: AdipsPalette.darkTextHint,
++    border: AdipsPalette.darkBorder,
++    divider: AdipsPalette.darkDivider,
++    action: AdipsPalette.darkAction,
++    actionHover: AdipsPalette.darkActionHover,
++    actionTint: AdipsPalette.darkActionTint,
++    gain: AdipsPalette.darkGain,
++    gainTint: AdipsPalette.darkGainTint,
++    loss: AdipsPalette.darkLoss,
++    lossTint: AdipsPalette.darkLossTint,
++    caution: AdipsPalette.darkCaution,
++    cautionTint: AdipsPalette.darkCautionTint,
++  );
++
++  @override
++  AdipsColors copyWith({
++    Color? canvas,
++    Color? surface,
++    Color? subtle,
++    Color? textPrimary,
++    Color? textMuted,
++    Color? textHint,
++    Color? border,
++    Color? divider,
++    Color? action,
++    Color? actionHover,
++    Color? actionTint,
++    Color? gain,
++    Color? gainTint,
++    Color? loss,
++    Color? lossTint,
++    Color? caution,
++    Color? cautionTint,
++  }) => AdipsColors(
++    canvas: canvas ?? this.canvas,
++    surface: surface ?? this.surface,
++    subtle: subtle ?? this.subtle,
++    textPrimary: textPrimary ?? this.textPrimary,
++    textMuted: textMuted ?? this.textMuted,
++    textHint: textHint ?? this.textHint,
++    border: border ?? this.border,
++    divider: divider ?? this.divider,
++    action: action ?? this.action,
++    actionHover: actionHover ?? this.actionHover,
++    actionTint: actionTint ?? this.actionTint,
++    gain: gain ?? this.gain,
++    gainTint: gainTint ?? this.gainTint,
++    loss: loss ?? this.loss,
++    lossTint: lossTint ?? this.lossTint,
++    caution: caution ?? this.caution,
++    cautionTint: cautionTint ?? this.cautionTint,
++  );
++
++  @override
++  AdipsColors lerp(AdipsColors? other, double t) {
++    if (other == null) return this;
++    return AdipsColors(
++      canvas: Color.lerp(canvas, other.canvas, t)!,
++      surface: Color.lerp(surface, other.surface, t)!,
++      subtle: Color.lerp(subtle, other.subtle, t)!,
++      textPrimary: Color.lerp(textPrimary, other.textPrimary, t)!,
++      textMuted: Color.lerp(textMuted, other.textMuted, t)!,
++      textHint: Color.lerp(textHint, other.textHint, t)!,
++      border: Color.lerp(border, other.border, t)!,
++      divider: Color.lerp(divider, other.divider, t)!,
++      action: Color.lerp(action, other.action, t)!,
++      actionHover: Color.lerp(actionHover, other.actionHover, t)!,
++      actionTint: Color.lerp(actionTint, other.actionTint, t)!,
++      gain: Color.lerp(gain, other.gain, t)!,
++      gainTint: Color.lerp(gainTint, other.gainTint, t)!,
++      loss: Color.lerp(loss, other.loss, t)!,
++      lossTint: Color.lerp(lossTint, other.lossTint, t)!,
++      caution: Color.lerp(caution, other.caution, t)!,
++      cautionTint: Color.lerp(cautionTint, other.cautionTint, t)!,
++    );
++  }
++}
+diff --git a/lib/core/theme/custom_theme/adips_divider_theme.dart b/lib/core/theme/custom_theme/adips_divider_theme.dart
+new file mode 100644
+index 0000000..cbb7f90
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_divider_theme.dart
+@@ -0,0 +1,18 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsDividerTheme {
++  AdipsDividerTheme._();
++
++  static const lightDividerTheme = DividerThemeData(
++    color: AdipsPalette.lightDivider,
++    thickness: 0.5,
++    space: 0,
++  );
++
++  static const darkDividerTheme = DividerThemeData(
++    color: AdipsPalette.darkDivider,
++    thickness: 0.5,
++    space: 0,
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_elevated_button_theme.dart b/lib/core/theme/custom_theme/adips_elevated_button_theme.dart
+new file mode 100644
+index 0000000..8ba1bb3
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_elevated_button_theme.dart
+@@ -0,0 +1,43 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsElevatedButtonTheme {
++  AdipsElevatedButtonTheme._();
++
++  static final lightElevatedButtonTheme = ElevatedButtonThemeData(
++    style: ElevatedButton.styleFrom(
++      elevation: 0,
++      foregroundColor: Colors.white,
++      backgroundColor: AdipsPalette.lightAction,
++      disabledForegroundColor: AdipsPalette.lightTextHint,
++      disabledBackgroundColor: AdipsPalette.lightSubtle,
++      side: const BorderSide(color: AdipsPalette.lightAction, width: 0),
++      padding: const EdgeInsets.symmetric(vertical: 18),
++      textStyle: const TextStyle(
++        fontSize: 16,
++        fontWeight: FontWeight.w600,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++
++  static final darkElevatedButtonTheme = ElevatedButtonThemeData(
++    style: ElevatedButton.styleFrom(
++      elevation: 0,
++      foregroundColor: AdipsPalette.darkCanvas,
++      backgroundColor: AdipsPalette.darkTextPrimary,
++      disabledForegroundColor: AdipsPalette.darkTextHint,
++      disabledBackgroundColor: AdipsPalette.darkSubtle,
++      side: const BorderSide(color: AdipsPalette.darkTextPrimary, width: 0),
++      padding: const EdgeInsets.symmetric(vertical: 18),
++      textStyle: const TextStyle(
++        fontSize: 16,
++        fontWeight: FontWeight.w600,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_input_decoration_theme.dart b/lib/core/theme/custom_theme/adips_input_decoration_theme.dart
+new file mode 100644
+index 0000000..ab640ec
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_input_decoration_theme.dart
+@@ -0,0 +1,114 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsInputDecorationTheme {
++  AdipsInputDecorationTheme._();
++
++  static InputDecorationTheme lightInputDecorationTheme = InputDecorationTheme(
++    filled: true,
++    fillColor: AdipsPalette.lightSubtle,
++    hintStyle: const TextStyle(
++      fontSize: 14,
++      color: AdipsPalette.lightTextHint,
++      fontFamily: 'Poppins',
++    ),
++    labelStyle: const TextStyle(
++      fontSize: 14,
++      color: AdipsPalette.lightTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    floatingLabelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.lightAction,
++      fontFamily: 'Poppins',
++    ),
++    errorStyle: const TextStyle(
++      fontSize: 11,
++      color: AdipsPalette.lightLoss,
++      fontFamily: 'Poppins',
++    ),
++    prefixIconColor: AdipsPalette.lightTextMuted,
++    suffixIconColor: AdipsPalette.lightTextMuted,
++    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
++    border: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++    ),
++    enabledBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++    ),
++    focusedBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.lightAction, width: 1.5),
++    ),
++    errorBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.lightLoss, width: 0.5),
++    ),
++    focusedErrorBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.lightLoss, width: 1.5),
++    ),
++    disabledBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(
++        color: AdipsPalette.lightDivider,
++        width: 0.5,
++      ),
++    ),
++  );
++
++  static InputDecorationTheme darkInputDecorationTheme = InputDecorationTheme(
++    filled: true,
++    fillColor: AdipsPalette.darkSubtle,
++    hintStyle: const TextStyle(
++      fontSize: 14,
++      color: AdipsPalette.darkTextHint,
++      fontFamily: 'Poppins',
++    ),
++    labelStyle: const TextStyle(
++      fontSize: 14,
++      color: AdipsPalette.darkTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    floatingLabelStyle: const TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.darkAction,
++      fontFamily: 'Poppins',
++    ),
++    errorStyle: const TextStyle(
++      fontSize: 11,
++      color: AdipsPalette.darkLoss,
++      fontFamily: 'Poppins',
++    ),
++    prefixIconColor: AdipsPalette.darkTextMuted,
++    suffixIconColor: AdipsPalette.darkTextMuted,
++    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
++    border: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++    ),
++    enabledBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++    ),
++    focusedBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkAction, width: 1.5),
++    ),
++    errorBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkLoss, width: 0.5),
++    ),
++    focusedErrorBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkLoss, width: 1.5),
++    ),
++    disabledBorder: OutlineInputBorder(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      borderSide: const BorderSide(color: AdipsPalette.darkDivider, width: 0.5),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_list_tile_theme.dart b/lib/core/theme/custom_theme/adips_list_tile_theme.dart
+new file mode 100644
+index 0000000..38fff99
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_list_tile_theme.dart
+@@ -0,0 +1,67 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsListTileTheme {
++  AdipsListTileTheme._();
++
++  static const lightListTileTheme = ListTileThemeData(
++    tileColor: AdipsPalette.lightSurface,
++    iconColor: AdipsPalette.lightTextMuted,
++    textColor: AdipsPalette.lightTextPrimary,
++    titleTextStyle: TextStyle(
++      fontSize: 14,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++      fontFamily: 'Poppins',
++    ),
++    subtitleTextStyle: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.lightTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    leadingAndTrailingTextStyle: TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.lightTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
++    minLeadingWidth: 0,
++    minVerticalPadding: 8,
++    dense: false,
++    shape: RoundedRectangleBorder(
++      borderRadius: BorderRadius.all(Radius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++
++  static const darkListTileTheme = ListTileThemeData(
++    tileColor: AdipsPalette.darkSurface,
++    iconColor: AdipsPalette.darkTextMuted,
++    textColor: AdipsPalette.darkTextPrimary,
++    titleTextStyle: TextStyle(
++      fontSize: 14,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++      fontFamily: 'Poppins',
++    ),
++    subtitleTextStyle: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.darkTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    leadingAndTrailingTextStyle: TextStyle(
++      fontSize: 12,
++      color: AdipsPalette.darkTextMuted,
++      fontFamily: 'Poppins',
++    ),
++    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
++    minLeadingWidth: 0,
++    minVerticalPadding: 8,
++    dense: false,
++    shape: RoundedRectangleBorder(
++      borderRadius: BorderRadius.all(Radius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_outlined_button_theme.dart b/lib/core/theme/custom_theme/adips_outlined_button_theme.dart
+new file mode 100644
+index 0000000..989ff5c
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_outlined_button_theme.dart
+@@ -0,0 +1,37 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsOutlinedButtonTheme {
++  AdipsOutlinedButtonTheme._();
++
++  static final lightOutlinedButtonTheme = OutlinedButtonThemeData(
++    style: OutlinedButton.styleFrom(
++      foregroundColor: AdipsPalette.lightTextPrimary,
++      disabledForegroundColor: AdipsPalette.lightTextHint,
++      side: const BorderSide(color: AdipsPalette.lightBorder, width: 0.5),
++      padding: const EdgeInsets.symmetric(vertical: 18),
++      textStyle: const TextStyle(
++        fontSize: 16,
++        fontWeight: FontWeight.w500,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++
++  static final darkOutlinedButtonTheme = OutlinedButtonThemeData(
++    style: OutlinedButton.styleFrom(
++      foregroundColor: AdipsPalette.darkTextPrimary,
++      disabledForegroundColor: AdipsPalette.darkTextHint,
++      side: const BorderSide(color: AdipsPalette.darkBorder, width: 0.5),
++      padding: const EdgeInsets.symmetric(vertical: 18),
++      textStyle: const TextStyle(
++        fontSize: 16,
++        fontWeight: FontWeight.w500,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_switch_theme.dart b/lib/core/theme/custom_theme/adips_switch_theme.dart
+new file mode 100644
+index 0000000..a8b2c07
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_switch_theme.dart
+@@ -0,0 +1,44 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsSwitchTheme {
++  AdipsSwitchTheme._();
++
++  static SwitchThemeData lightSwitchTheme = SwitchThemeData(
++    thumbColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.lightAction
++          : AdipsPalette.lightTextHint,
++    ),
++    trackColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.lightActionTint
++          : AdipsPalette.lightSubtle,
++    ),
++    trackOutlineColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? Colors.transparent
++          : AdipsPalette.lightBorder,
++    ),
++    trackOutlineWidth: WidgetStateProperty.all(0.5),
++  );
++
++  static SwitchThemeData darkSwitchTheme = SwitchThemeData(
++    thumbColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.darkAction
++          : AdipsPalette.darkTextHint,
++    ),
++    trackColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? AdipsPalette.darkActionTint
++          : AdipsPalette.darkSubtle,
++    ),
++    trackOutlineColor: WidgetStateProperty.resolveWith(
++      (states) => states.contains(WidgetState.selected)
++          ? Colors.transparent
++          : AdipsPalette.darkBorder,
++    ),
++    trackOutlineWidth: WidgetStateProperty.all(0.5),
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_tab_bar_theme.dart b/lib/core/theme/custom_theme/adips_tab_bar_theme.dart
+new file mode 100644
+index 0000000..9961a1c
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_tab_bar_theme.dart
+@@ -0,0 +1,44 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsTabBar {
++  AdipsTabBar._();
++
++  static const lightTabBarTheme = TabBarThemeData(
++    labelColor: AdipsPalette.lightAction,
++    unselectedLabelColor: AdipsPalette.lightTextMuted,
++    indicatorColor: AdipsPalette.lightAction,
++    indicatorSize: TabBarIndicatorSize.tab,
++    dividerColor: AdipsPalette.lightDivider,
++    labelStyle: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++    ),
++    unselectedLabelStyle: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w400,
++      fontFamily: 'Poppins',
++    ),
++    overlayColor: WidgetStatePropertyAll(AdipsPalette.lightActionTint),
++  );
++
++  static const darkTabBarTheme = TabBarThemeData(
++    labelColor: AdipsPalette.darkAction,
++    unselectedLabelColor: AdipsPalette.darkTextMuted,
++    indicatorColor: AdipsPalette.darkAction,
++    indicatorSize: TabBarIndicatorSize.tab,
++    dividerColor: AdipsPalette.darkDivider,
++    labelStyle: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      fontFamily: 'Poppins',
++    ),
++    unselectedLabelStyle: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w400,
++      fontFamily: 'Poppins',
++    ),
++    overlayColor: WidgetStatePropertyAll(AdipsPalette.darkActionTint),
++  );
++}
+diff --git a/lib/core/theme/custom_theme/adips_text_button_theme.dart b/lib/core/theme/custom_theme/adips_text_button_theme.dart
+new file mode 100644
+index 0000000..0013c1a
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_text_button_theme.dart
+@@ -0,0 +1,35 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++
++class AdipsTextButtonTheme {
++  AdipsTextButtonTheme._();
++
++  static final lightTextButtonTheme = TextButtonThemeData(
++    style: TextButton.styleFrom(
++      foregroundColor: AdipsPalette.lightAction,
++      disabledForegroundColor: AdipsPalette.lightTextHint,
++      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
++      textStyle: const TextStyle(
++        fontSize: 13,
++        fontWeight: FontWeight.w500,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++
++  static final darkTextButtonTheme = TextButtonThemeData(
++    style: TextButton.styleFrom(
++      foregroundColor: AdipsPalette.darkAction,
++      disabledForegroundColor: AdipsPalette.darkTextHint,
++      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
++      textStyle: const TextStyle(
++        fontSize: 13,
++        fontWeight: FontWeight.w500,
++        fontFamily: 'Poppins',
++      ),
++      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm)),
++    ),
++  );
++}
+\ No newline at end of file
+diff --git a/lib/core/theme/custom_theme/adips_text_theme.dart b/lib/core/theme/custom_theme/adips_text_theme.dart
+new file mode 100644
+index 0000000..cb48348
+--- /dev/null
++++ b/lib/core/theme/custom_theme/adips_text_theme.dart
+@@ -0,0 +1,170 @@
++import 'package:flutter/material.dart';
++import 'package:adips_web/core/constants/adips_palette.dart';
++
++class AdipsTextTheme {
++  AdipsTextTheme._();
++
++  static const lightTextTheme = TextTheme(
++    displayLarge: TextStyle(
++      fontSize: 32,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.lightTextPrimary,
++      letterSpacing: -0.5,
++    ),
++    displayMedium: TextStyle(
++      fontSize: 26,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.lightTextPrimary,
++      letterSpacing: -0.3,
++    ),
++    displaySmall: TextStyle(
++      fontSize: 22,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.lightTextPrimary,
++      letterSpacing: -0.2,
++    ),
++    headlineLarge: TextStyle(
++      fontSize: 20,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    headlineMedium: TextStyle(
++      fontSize: 18,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    headlineSmall: TextStyle(
++      fontSize: 16,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    titleLarge: TextStyle(
++      fontSize: 17,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    titleMedium: TextStyle(
++      fontSize: 15,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    titleSmall: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    bodyLarge: TextStyle(
++      fontSize: 15,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    bodyMedium: TextStyle(
++      fontSize: 14,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    bodySmall: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.lightTextMuted,
++    ),
++    labelLarge: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextPrimary,
++    ),
++    labelMedium: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextMuted,
++    ),
++    labelSmall: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.lightTextMuted,
++      letterSpacing: 0.05,
++    ),
++  );
++
++  static const darkTextTheme = TextTheme(
++    displayLarge: TextStyle(
++      fontSize: 32,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.darkTextPrimary,
++      letterSpacing: -0.5,
++    ),
++    displayMedium: TextStyle(
++      fontSize: 26,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.darkTextPrimary,
++      letterSpacing: -0.3,
++    ),
++    displaySmall: TextStyle(
++      fontSize: 22,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.darkTextPrimary,
++      letterSpacing: -0.2,
++    ),
++    headlineLarge: TextStyle(
++      fontSize: 20,
++      fontWeight: FontWeight.w600,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    headlineMedium: TextStyle(
++      fontSize: 18,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    headlineSmall: TextStyle(
++      fontSize: 16,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    titleLarge: TextStyle(
++      fontSize: 17,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    titleMedium: TextStyle(
++      fontSize: 15,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    titleSmall: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    bodyLarge: TextStyle(
++      fontSize: 15,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    bodyMedium: TextStyle(
++      fontSize: 14,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    bodySmall: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w400,
++      color: AdipsPalette.darkTextMuted,
++    ),
++    labelLarge: TextStyle(
++      fontSize: 13,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextPrimary,
++    ),
++    labelMedium: TextStyle(
++      fontSize: 12,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextMuted,
++    ),
++    labelSmall: TextStyle(
++      fontSize: 11,
++      fontWeight: FontWeight.w500,
++      color: AdipsPalette.darkTextMuted,
++      letterSpacing: 0.05,
++    ),
++  );
++}
+diff --git a/lib/core/theme/theme_controller.dart b/lib/core/theme/theme_controller.dart
+new file mode 100644
+index 0000000..ebdb4eb
+--- /dev/null
++++ b/lib/core/theme/theme_controller.dart
+@@ -0,0 +1,32 @@
++import 'package:flutter/material.dart';
++import 'package:get/get.dart';
++import 'package:get_storage/get_storage.dart';
++
++/// Light/dark switch for the web app. Persisted in browser storage.
++///
++/// Dark is the default because the plan keeps the dark theme as the primary
++/// ADIPS identity (the mobile app follows the system setting; revisit if
++/// product wants parity).
++class ThemeController extends GetxController {
++  static ThemeController get to => Get.find<ThemeController>();
++
++  static const String _storageKey = 'web_theme_mode';
++
++  final GetStorage _box = GetStorage();
++  final Rx<ThemeMode> mode = ThemeMode.dark.obs;
++
++  bool get isDark => mode.value == ThemeMode.dark;
++
++  @override
++  void onInit() {
++    super.onInit();
++    mode.value = _box.read<String>(_storageKey) == 'light'
++        ? ThemeMode.light
++        : ThemeMode.dark;
++  }
++
++  void toggle() {
++    mode.value = isDark ? ThemeMode.light : ThemeMode.dark;
++    _box.write(_storageKey, isDark ? 'dark' : 'light');
++  }
++}
+diff --git a/lib/main.dart b/lib/main.dart
+index 244a702..e7c0911 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -1,122 +1,18 @@
++import 'package:adips_web/app.dart';
++import 'package:adips_web/core/theme/theme_controller.dart';
+ import 'package:flutter/material.dart';
++import 'package:flutter_web_plugins/url_strategy.dart';
++import 'package:get/get.dart';
++import 'package:get_storage/get_storage.dart';
+ 
+-void main() {
+-  runApp(const MyApp());
+-}
+-
+-class MyApp extends StatelessWidget {
+-  const MyApp({super.key});
+-
+-  // This widget is the root of your application.
+-  @override
+-  Widget build(BuildContext context) {
+-    return MaterialApp(
+-      title: 'Flutter Demo',
+-      theme: ThemeData(
+-        // This is the theme of your application.
+-        //
+-        // TRY THIS: Try running your application with "flutter run". You'll see
+-        // the application has a purple toolbar. Then, without quitting the app,
+-        // try changing the seedColor in the colorScheme below to Colors.green
+-        // and then invoke "hot reload" (save your changes or press the "hot
+-        // reload" button in a Flutter-supported IDE, or press "r" if you used
+-        // the command line to start the app).
+-        //
+-        // Notice that the counter didn't reset back to zero; the application
+-        // state is not lost during the reload. To reset the state, use hot
+-        // restart instead.
+-        //
+-        // This works for code too, not just values: Most code changes can be
+-        // tested with just a hot reload.
+-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+-      ),
+-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+-    );
+-  }
+-}
+-
+-class MyHomePage extends StatefulWidget {
+-  const MyHomePage({super.key, required this.title});
+-
+-  // This widget is the home page of your application. It is stateful, meaning
+-  // that it has a State object (defined below) that contains fields that affect
+-  // how it looks.
+-
+-  // This class is the configuration for the state. It holds the values (in this
+-  // case the title) provided by the parent (in this case the App widget) and
+-  // used by the build method of the State. Fields in a Widget subclass are
+-  // always marked "final".
+-
+-  final String title;
+-
+-  @override
+-  State<MyHomePage> createState() => _MyHomePageState();
+-}
++Future<void> main() async {
++  WidgetsFlutterBinding.ensureInitialized();
+ 
+-class _MyHomePageState extends State<MyHomePage> {
+-  int _counter = 0;
++  // /dashboard instead of /#/dashboard (host must rewrite to index.html).
++  usePathUrlStrategy();
+ 
+-  void _incrementCounter() {
+-    setState(() {
+-      // This call to setState tells the Flutter framework that something has
+-      // changed in this State, which causes it to rerun the build method below
+-      // so that the display can reflect the updated values. If we changed
+-      // _counter without calling setState(), then the build method would not be
+-      // called again, and so nothing would appear to happen.
+-      _counter++;
+-    });
+-  }
++  await GetStorage.init();
++  Get.put(ThemeController(), permanent: true);
+ 
+-  @override
+-  Widget build(BuildContext context) {
+-    // This method is rerun every time setState is called, for instance as done
+-    // by the _incrementCounter method above.
+-    //
+-    // The Flutter framework has been optimized to make rerunning build methods
+-    // fast, so that you can just rebuild anything that needs updating rather
+-    // than having to individually change instances of widgets.
+-    return Scaffold(
+-      appBar: AppBar(
+-        // TRY THIS: Try changing the color here to a specific color (to
+-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
+-        // change color while the other colors stay the same.
+-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+-        // Here we take the value from the MyHomePage object that was created by
+-        // the App.build method, and use it to set our appbar title.
+-        title: Text(widget.title),
+-      ),
+-      body: Center(
+-        // Center is a layout widget. It takes a single child and positions it
+-        // in the middle of the parent.
+-        child: Column(
+-          // Column is also a layout widget. It takes a list of children and
+-          // arranges them vertically. By default, it sizes itself to fit its
+-          // children horizontally, and tries to be as tall as its parent.
+-          //
+-          // Column has various properties to control how it sizes itself and
+-          // how it positions its children. Here we use mainAxisAlignment to
+-          // center the children vertically; the main axis here is the vertical
+-          // axis because Columns are vertical (the cross axis would be
+-          // horizontal).
+-          //
+-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
+-          // action in the IDE, or press "p" in the console), to see the
+-          // wireframe for each widget.
+-          mainAxisAlignment: .center,
+-          children: [
+-            const Text('You have pushed the button this many times:'),
+-            Text(
+-              '$_counter',
+-              style: Theme.of(context).textTheme.headlineMedium,
+-            ),
+-          ],
+-        ),
+-      ),
+-      floatingActionButton: FloatingActionButton(
+-        onPressed: _incrementCounter,
+-        tooltip: 'Increment',
+-        child: const Icon(Icons.add),
+-      ),
+-    );
+-  }
++  runApp(const AdipsWebApp());
+ }
+diff --git a/lib/routes/app_router.dart b/lib/routes/app_router.dart
+new file mode 100644
+index 0000000..c91e9ee
+--- /dev/null
++++ b/lib/routes/app_router.dart
+@@ -0,0 +1,81 @@
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:adips_web/web/auth/auth_placeholder_page.dart';
++import 'package:adips_web/web/common/not_found_page.dart';
++import 'package:adips_web/web/common/page_placeholder.dart';
++import 'package:adips_web/web/layout/web_shell.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router/go_router.dart';
++
++class AppRouter {
++  AppRouter._();
++
++  static final GoRouter router = GoRouter(
++    initialLocation: AppRoutes.dashboard,
++    errorBuilder: (context, state) => NotFoundPage(location: state.uri.toString()),
++    routes: [
++      GoRoute(path: '/', redirect: (context, state) => AppRoutes.dashboard),
++
++      // Outside the shell. Patch 02 replaces these and adds the auth guard.
++      GoRoute(
++        path: AppRoutes.login,
++        builder: (context, state) =>
++            const AuthPlaceholderPage(title: 'Sign in', patch: 2),
++      ),
++      GoRoute(
++        path: AppRoutes.register,
++        builder: (context, state) =>
++            const AuthPlaceholderPage(title: 'Create account', patch: 2),
++      ),
++      GoRoute(
++        path: AppRoutes.onboarding,
++        builder: (context, state) =>
++            const AuthPlaceholderPage(title: 'Welcome to ADIPS', patch: 2),
++      ),
++
++      // Inside the shell. Order matters: /transactions/add before /:id.
++      ShellRoute(
++        builder: (context, state, child) =>
++            WebShell(location: state.uri.path, child: child),
++        routes: [
++          _page(AppRoutes.dashboard, 'Dashboard', Icons.dashboard_outlined, 3),
++          _page(AppRoutes.transactions, 'Transactions', Icons.receipt_long_outlined, 4),
++          _page(AppRoutes.transactionAdd, 'Add Transaction', Icons.add_card_outlined, 4),
++          _page(
++            AppRoutes.transactionDetails,
++            'Transaction Details',
++            Icons.receipt_long_outlined,
++            4,
++            detailsFor: (s) => 'Transaction #${s.pathParameters['id']}',
++          ),
++          _page(AppRoutes.transferAdd, 'New Transfer', Icons.swap_horiz, 5),
++          _page(AppRoutes.accounts, 'Accounts', Icons.account_balance_wallet_outlined, 6),
++          _page(AppRoutes.categories, 'Categories', Icons.category_outlined, 7),
++          _page(AppRoutes.transactionTypes, 'Transaction Types', Icons.swap_horiz, 7),
++          _page(AppRoutes.settings, 'Settings', Icons.settings_outlined, 8),
++          _page(AppRoutes.profile, 'Profile', Icons.person_outline, 8),
++        ],
++      ),
++    ],
++  );
++
++  static GoRoute _page(
++    String path,
++    String title,
++    IconData icon,
++    int patch, {
++    String Function(GoRouterState state)? detailsFor,
++  }) {
++    return GoRoute(
++      path: path,
++      pageBuilder: (context, state) => NoTransitionPage<void>(
++        key: state.pageKey,
++        child: PagePlaceholder(
++          title: title,
++          icon: icon,
++          patch: patch,
++          details: detailsFor?.call(state),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/routes/app_routes.dart b/lib/routes/app_routes.dart
+new file mode 100644
+index 0000000..b52215c
+--- /dev/null
++++ b/lib/routes/app_routes.dart
+@@ -0,0 +1,23 @@
++/// Route map from the plan (section 10). Keep paths here, never inline.
++class AppRoutes {
++  AppRoutes._();
++
++  // Outside the shell (no sidebar)
++  static const String login = '/login';
++  static const String register = '/register';
++  static const String onboarding = '/onboarding';
++
++  // Inside the shell
++  static const String dashboard = '/dashboard';
++  static const String transactions = '/transactions';
++  static const String transactionAdd = '/transactions/add';
++  static const String transactionDetails = '/transactions/:id';
++  static const String transferAdd = '/transfers/add';
++  static const String accounts = '/accounts';
++  static const String categories = '/categories';
++  static const String transactionTypes = '/transaction-types';
++  static const String settings = '/settings';
++  static const String profile = '/profile';
++
++  static String transactionDetail(Object id) => '/transactions/$id';
++}
+diff --git a/lib/web/auth/auth_placeholder_page.dart b/lib/web/auth/auth_placeholder_page.dart
+new file mode 100644
+index 0000000..2e3bb36
+--- /dev/null
++++ b/lib/web/auth/auth_placeholder_page.dart
+@@ -0,0 +1,71 @@
++import 'package:adips_web/core/constants/sizes.dart';
++import 'package:adips_web/core/constants/web_assets.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router/go_router.dart';
++
++/// TEMPORARY (Patch 01) for /login, /register, /onboarding.
++/// Patch 02 replaces these with the real forms and an auth guard.
++class AuthPlaceholderPage extends StatelessWidget {
++  const AuthPlaceholderPage({super.key, required this.title, required this.patch});
++
++  final String title;
++  final int patch;
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Theme.of(context).extension<AdipsColors>()!;
++    final isDark = Theme.of(context).brightness == Brightness.dark;
++    return Scaffold(
++      body: Center(
++        child: SingleChildScrollView(
++          padding: const EdgeInsets.all(AdipsSizes.lg),
++          child: ConstrainedBox(
++            constraints: const BoxConstraints(maxWidth: 420),
++            child: Card(
++              child: Padding(
++                padding: const EdgeInsets.all(AdipsSizes.xl),
++                child: Column(
++                  mainAxisSize: MainAxisSize.min,
++                  children: [
++                    SizedBox(
++                      height: 56,
++                      child: ClipRect(
++                        child: OverflowBox(
++                          maxHeight: 130,
++                          maxWidth: 260,
++                          child: Image.asset(
++                            isDark
++                                ? WebAssets.horizontalLogoOnDark
++                                : WebAssets.horizontalLogoOnLight,
++                            height: 130,
++                            width: 260,
++                            errorBuilder: (context, error, stackTrace) =>
++                                const Text('ADIPS'),
++                          ),
++                        ),
++                      ),
++                    ),
++                    const SizedBox(height: AdipsSizes.md),
++                    Text(title, style: Theme.of(context).textTheme.headlineSmall),
++                    const SizedBox(height: AdipsSizes.sm),
++                    Text(
++                      'Built in Patch ${patch.toString().padLeft(2, '0')}.',
++                      style: TextStyle(color: c.textMuted),
++                    ),
++                    const SizedBox(height: AdipsSizes.lg),
++                    FilledButton(
++                      onPressed: () => context.go(AppRoutes.dashboard),
++                      child: const Text('Continue to dashboard (temporary)'),
++                    ),
++                  ],
++                ),
++              ),
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/web/common/not_found_page.dart b/lib/web/common/not_found_page.dart
+new file mode 100644
+index 0000000..c46a760
+--- /dev/null
++++ b/lib/web/common/not_found_page.dart
+@@ -0,0 +1,33 @@
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router/go_router.dart';
++
++class NotFoundPage extends StatelessWidget {
++  const NotFoundPage({super.key, required this.location});
++
++  final String location;
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      body: Center(
++        child: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            const Icon(Icons.search_off, size: 48),
++            const SizedBox(height: 12),
++            Text('Page not found', style: Theme.of(context).textTheme.headlineSmall),
++            const SizedBox(height: 4),
++            Text(location, maxLines: 1, overflow: TextOverflow.ellipsis),
++            const SizedBox(height: 16),
++            FilledButton(
++              onPressed: () => context.go(AppRoutes.dashboard),
++              child: const Text('Go to dashboard'),
++            ),
++          ],
++        ),
++      ),
++    );
++  }
++}
++
+diff --git a/lib/web/common/page_placeholder.dart b/lib/web/common/page_placeholder.dart
+new file mode 100644
+index 0000000..b38fa0a
+--- /dev/null
++++ b/lib/web/common/page_placeholder.dart
+@@ -0,0 +1,57 @@
++import 'package:adips_web/core/constants/sizes.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:flutter/material.dart';
++
++/// Stand-in for a module that a later patch implements.
++class PagePlaceholder extends StatelessWidget {
++  const PagePlaceholder({
++    super.key,
++    required this.title,
++    required this.icon,
++    required this.patch,
++    this.details,
++  });
++
++  final String title;
++  final IconData icon;
++  final int patch;
++  final String? details;
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Theme.of(context).extension<AdipsColors>()!;
++    return Center(
++      child: SingleChildScrollView(
++        child: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            CircleAvatar(
++              radius: 36,
++              backgroundColor: c.actionTint,
++              child: Icon(icon, size: 34, color: c.action),
++            ),
++            const SizedBox(height: AdipsSizes.md),
++            Text(
++              title,
++              textAlign: TextAlign.center,
++              style: Theme.of(context)
++                  .textTheme
++                  .headlineSmall
++                  ?.copyWith(color: c.textPrimary, fontWeight: FontWeight.w600),
++            ),
++            const SizedBox(height: AdipsSizes.sm),
++            Text(
++              'This screen is built in Patch ${patch.toString().padLeft(2, '0')}.',
++              textAlign: TextAlign.center,
++              style: TextStyle(color: c.textMuted),
++            ),
++            if (details != null) ...[
++              const SizedBox(height: AdipsSizes.xs),
++              Text(details!, textAlign: TextAlign.center, style: TextStyle(color: c.textHint)),
++            ],
++          ],
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/web/layout/nav_items.dart b/lib/web/layout/nav_items.dart
+new file mode 100644
+index 0000000..d3a97b1
+--- /dev/null
++++ b/lib/web/layout/nav_items.dart
+@@ -0,0 +1,96 @@
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:flutter/material.dart';
++
++class NavItem {
++  const NavItem({
++    required this.label,
++    required this.icon,
++    required this.selectedIcon,
++    required this.path,
++    this.matchPrefixes = const [],
++  });
++
++  final String label;
++  final IconData icon;
++  final IconData selectedIcon;
++  final String path;
++
++  /// Extra route prefixes that should highlight this item
++  /// (e.g. /transfers/add belongs to Transactions).
++  final List<String> matchPrefixes;
++
++  bool matches(String location) {
++    for (final p in [path, ...matchPrefixes]) {
++      if (location == p || location.startsWith('$p/')) return true;
++    }
++    return false;
++  }
++}
++
++class AdipsNav {
++  AdipsNav._();
++
++  static const List<NavItem> items = [
++    NavItem(
++      label: 'Dashboard',
++      icon: Icons.dashboard_outlined,
++      selectedIcon: Icons.dashboard,
++      path: AppRoutes.dashboard,
++    ),
++    NavItem(
++      label: 'Transactions',
++      icon: Icons.receipt_long_outlined,
++      selectedIcon: Icons.receipt_long,
++      path: AppRoutes.transactions,
++      matchPrefixes: ['/transfers'],
++    ),
++    NavItem(
++      label: 'Accounts',
++      icon: Icons.account_balance_wallet_outlined,
++      selectedIcon: Icons.account_balance_wallet,
++      path: AppRoutes.accounts,
++    ),
++    NavItem(
++      label: 'Categories',
++      icon: Icons.category_outlined,
++      selectedIcon: Icons.category,
++      path: AppRoutes.categories,
++    ),
++    NavItem(
++      label: 'Transaction Types',
++      icon: Icons.swap_horiz,
++      selectedIcon: Icons.swap_horiz,
++      path: AppRoutes.transactionTypes,
++    ),
++    NavItem(
++      label: 'Settings',
++      icon: Icons.settings_outlined,
++      selectedIcon: Icons.settings,
++      path: AppRoutes.settings,
++      matchPrefixes: [AppRoutes.profile],
++    ),
++  ];
++
++  static NavItem? forLocation(String location) {
++    for (final item in items) {
++      if (item.matches(location)) return item;
++    }
++    return null;
++  }
++
++  /// Header title for a location.
++  static String titleFor(String location) {
++    switch (location) {
++      case AppRoutes.transactionAdd:
++        return 'Add Transaction';
++      case AppRoutes.transferAdd:
++        return 'New Transfer';
++      case AppRoutes.profile:
++        return 'Profile';
++    }
++    if (location.startsWith('${AppRoutes.transactions}/')) {
++      return 'Transaction Details';
++    }
++    return forLocation(location)?.label ?? 'ADIPS';
++  }
++}
+diff --git a/lib/web/layout/responsive_layout.dart b/lib/web/layout/responsive_layout.dart
+new file mode 100644
+index 0000000..d5305ad
+--- /dev/null
++++ b/lib/web/layout/responsive_layout.dart
+@@ -0,0 +1,22 @@
++import 'package:adips_web/core/responsive/breakpoints.dart';
++import 'package:flutter/material.dart';
++
++/// Builds its child from the width actually available (LayoutBuilder), so
++/// layouts react to the browser window and never rely on device dimensions.
++class ResponsiveLayout extends StatelessWidget {
++  const ResponsiveLayout({super.key, required this.builder});
++
++  final Widget Function(
++    BuildContext context,
++    ScreenSize size,
++    BoxConstraints constraints,
++  ) builder;
++
++  @override
++  Widget build(BuildContext context) {
++    return LayoutBuilder(
++      builder: (context, constraints) =>
++          builder(context, Breakpoints.fromWidth(constraints.maxWidth), constraints),
++    );
++  }
++}
+diff --git a/lib/web/layout/web_header.dart b/lib/web/layout/web_header.dart
+new file mode 100644
+index 0000000..179026c
+--- /dev/null
++++ b/lib/web/layout/web_header.dart
+@@ -0,0 +1,196 @@
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:adips_web/core/theme/theme_controller.dart';
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:flutter/material.dart';
++import 'package:get/get.dart';
++
++/// Top bar: page title, global "Add" menu, theme toggle and profile menu.
++class WebHeader extends StatelessWidget {
++  const WebHeader({
++    super.key,
++    required this.title,
++    required this.compact,
++    required this.onMenuPressed,
++    required this.onNavigate,
++    required this.onLogout,
++  });
++
++  final String title;
++
++  /// Narrow layout: show the hamburger and an icon-only Add button.
++  final bool compact;
++  final VoidCallback onMenuPressed;
++  final ValueChanged<String> onNavigate;
++  final VoidCallback onLogout;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final c = theme.extension<AdipsColors>()!;
++
++    return Container(
++      height: 64,
++      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 24),
++      decoration: BoxDecoration(
++        color: c.canvas,
++        border: Border(bottom: BorderSide(color: c.divider)),
++      ),
++      child: Row(
++        children: [
++          if (compact)
++            IconButton(
++              tooltip: 'Open navigation',
++              onPressed: onMenuPressed,
++              icon: const Icon(Icons.menu),
++            ),
++          Expanded(
++            child: Text(
++              title,
++              maxLines: 1,
++              overflow: TextOverflow.ellipsis,
++              style: theme.textTheme.titleLarge?.copyWith(
++                fontWeight: FontWeight.w600,
++                color: c.textPrimary,
++              ),
++            ),
++          ),
++          _AddMenu(compact: compact, onSelected: onNavigate),
++          const SizedBox(width: AdipsSizes.xs),
++          const _ThemeToggle(),
++          const SizedBox(width: AdipsSizes.xs),
++          _ProfileMenu(onNavigate: onNavigate, onLogout: onLogout),
++        ],
++      ),
++    );
++  }
++}
++
++class _AddMenu extends StatelessWidget {
++  const _AddMenu({required this.compact, required this.onSelected});
++
++  final bool compact;
++  final ValueChanged<String> onSelected;
++
++  @override
++  Widget build(BuildContext context) {
++    final isDark = Theme.of(context).brightness == Brightness.dark;
++    final bg = isDark
++        ? AdipsPalette.darkPrimaryButtonBackground
++        : AdipsPalette.lightPrimaryButtonBackground;
++
++    return PopupMenuButton<String>(
++      tooltip: 'Add',
++      onSelected: onSelected,
++      itemBuilder: (context) => const [
++        PopupMenuItem(
++          value: AppRoutes.transactionAdd,
++          child: _MenuRow(icon: Icons.add_card_outlined, label: 'Add transaction'),
++        ),
++        PopupMenuItem(
++          value: AppRoutes.transferAdd,
++          child: _MenuRow(icon: Icons.swap_horiz, label: 'New transfer'),
++        ),
++      ],
++      child: Container(
++        height: 40,
++        padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 16),
++        decoration: BoxDecoration(
++          color: bg,
++          borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusMd),
++        ),
++        child: Row(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            const Icon(Icons.add, color: AdipsPalette.darkPrimaryButtonText, size: 20),
++            if (!compact) ...[
++              const SizedBox(width: 6),
++              const Text(
++                'Add',
++                style: TextStyle(
++                  color: AdipsPalette.darkPrimaryButtonText,
++                  fontWeight: FontWeight.w600,
++                ),
++              ),
++            ],
++          ],
++        ),
++      ),
++    );
++  }
++}
++
++class _ThemeToggle extends StatelessWidget {
++  const _ThemeToggle();
++
++  @override
++  Widget build(BuildContext context) {
++    final controller = ThemeController.to;
++    return Obx(() {
++      final dark = controller.isDark;
++      return IconButton(
++        tooltip: dark ? 'Switch to light mode' : 'Switch to dark mode',
++        onPressed: controller.toggle,
++        icon: Icon(dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
++      );
++    });
++  }
++}
++
++class _ProfileMenu extends StatelessWidget {
++  const _ProfileMenu({required this.onNavigate, required this.onLogout});
++
++  final ValueChanged<String> onNavigate;
++  final VoidCallback onLogout;
++
++  static const String _logout = '__logout__';
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Theme.of(context).extension<AdipsColors>()!;
++
++    return PopupMenuButton<String>(
++      tooltip: 'Account',
++      onSelected: (value) => value == _logout ? onLogout() : onNavigate(value),
++      itemBuilder: (context) => const [
++        PopupMenuItem(
++          value: AppRoutes.profile,
++          child: _MenuRow(icon: Icons.person_outline, label: 'Profile'),
++        ),
++        PopupMenuItem(
++          value: AppRoutes.settings,
++          child: _MenuRow(icon: Icons.settings_outlined, label: 'Settings'),
++        ),
++        PopupMenuDivider(),
++        PopupMenuItem(
++          value: _logout,
++          child: _MenuRow(icon: Icons.logout, label: 'Log out'),
++        ),
++      ],
++      child: CircleAvatar(
++        radius: 18,
++        backgroundColor: c.actionTint,
++        child: Icon(Icons.person, size: 20, color: c.action),
++      ),
++    );
++  }
++}
++
++class _MenuRow extends StatelessWidget {
++  const _MenuRow({required this.icon, required this.label});
++
++  final IconData icon;
++  final String label;
++
++  @override
++  Widget build(BuildContext context) {
++    return Row(
++      children: [
++        Icon(icon, size: 20),
++        const SizedBox(width: 12),
++        Text(label),
++      ],
++    );
++  }
++}
+diff --git a/lib/web/layout/web_shell.dart b/lib/web/layout/web_shell.dart
+new file mode 100644
+index 0000000..b831a01
+--- /dev/null
++++ b/lib/web/layout/web_shell.dart
+@@ -0,0 +1,97 @@
++import 'package:adips_web/core/responsive/breakpoints.dart';
++import 'package:adips_web/routes/app_routes.dart';
++import 'package:adips_web/web/layout/nav_items.dart';
++import 'package:adips_web/web/layout/responsive_layout.dart';
++import 'package:adips_web/web/layout/web_header.dart';
++import 'package:adips_web/web/layout/web_sidebar.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router/go_router.dart';
++
++/// Authenticated app frame: sidebar + header + centred content area.
++///
++/// ≥1200px full sidebar, 768-1199px icon rail, <768px drawer.
++class WebShell extends StatefulWidget {
++  const WebShell({super.key, required this.location, required this.child});
++
++  /// Current route path (drives the selected nav item and header title).
++  final String location;
++  final Widget child;
++
++  @override
++  State<WebShell> createState() => _WebShellState();
++}
++
++class _WebShellState extends State<WebShell> {
++  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
++
++  void _go(String path) {
++    _scaffoldKey.currentState?.closeDrawer();
++    if (path != widget.location) context.go(path);
++  }
++
++  // TEMPORARY (Patch 01): Patch 02 replaces this with the real logout
++  // (clear token/session, then redirect to /login).
++  void _logout() => context.go(AppRoutes.login);
++
++  @override
++  Widget build(BuildContext context) {
++    return ResponsiveLayout(
++      builder: (context, size, constraints) {
++        final compact = size == ScreenSize.compact;
++        final railOnly = size == ScreenSize.medium;
++
++        return Scaffold(
++          key: _scaffoldKey,
++          drawer: compact
++              ? Drawer(
++                  child: SafeArea(
++                    child: WebSidebar(location: widget.location, onNavigate: _go),
++                  ),
++                )
++              : null,
++          body: Row(
++            crossAxisAlignment: CrossAxisAlignment.stretch,
++            children: [
++              if (!compact)
++                WebSidebar(
++                  location: widget.location,
++                  onNavigate: _go,
++                  collapsed: railOnly,
++                  width: railOnly
++                      ? WebSidebar.collapsedWidth
++                      : WebSidebar.expandedWidth,
++                ),
++              Expanded(
++                child: Column(
++                  children: [
++                    WebHeader(
++                      title: AdipsNav.titleFor(widget.location),
++                      compact: compact,
++                      onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
++                      onNavigate: _go,
++                      onLogout: _logout,
++                    ),
++                    Expanded(
++                      child: Align(
++                        alignment: Alignment.topCenter,
++                        child: ConstrainedBox(
++                          constraints: const BoxConstraints(
++                            maxWidth: Breakpoints.contentMaxWidth,
++                          ),
++                          child: Padding(
++                            padding: EdgeInsets.all(Breakpoints.contentPadding(size)),
++                            child: widget.child,
++                          ),
++                        ),
++                      ),
++                    ),
++                  ],
++                ),
++              ),
++            ],
++          ),
++        );
++      },
++    );
++  }
++}
+diff --git a/lib/web/layout/web_sidebar.dart b/lib/web/layout/web_sidebar.dart
+new file mode 100644
+index 0000000..5c90b38
+--- /dev/null
++++ b/lib/web/layout/web_sidebar.dart
+@@ -0,0 +1,209 @@
++import 'package:adips_web/core/constants/adips_palette.dart';
++import 'package:adips_web/core/constants/sizes.dart';
++import 'package:adips_web/core/constants/web_assets.dart';
++import 'package:adips_web/core/theme/custom_theme/adips_colors.dart';
++import 'package:adips_web/web/layout/nav_items.dart';
++import 'package:flutter/material.dart';
++
++/// Persistent left navigation.
++///
++/// * [collapsed] = false: logo + icon/label rows (>= 1200px, and inside the
++///   drawer on narrow screens)
++/// * [collapsed] = true: icon rail with tooltips (768-1199px)
++///
++/// Purely presentational: it receives the current [location] and reports taps
++/// through [onNavigate], so it is easy to widget-test and has no router
++/// dependency.
++class WebSidebar extends StatelessWidget {
++  const WebSidebar({
++    super.key,
++    required this.location,
++    required this.onNavigate,
++    this.collapsed = false,
++    this.width,
++  });
++
++  static const double expandedWidth = 248;
++  static const double collapsedWidth = 76;
++
++  final String location;
++  final ValueChanged<String> onNavigate;
++  final bool collapsed;
++
++  /// Null = fill the available width (used inside a Drawer).
++  final double? width;
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Theme.of(context).extension<AdipsColors>()!;
++    final isDark = Theme.of(context).brightness == Brightness.dark;
++    final accent =
++        isDark ? AdipsPalette.darkPrimaryBrandText : AdipsPalette.lightPrimaryBrandText;
++
++    return Container(
++      width: width,
++      decoration: BoxDecoration(
++        color: c.surface,
++        border: Border(right: BorderSide(color: c.divider)),
++      ),
++      child: Column(
++        crossAxisAlignment: CrossAxisAlignment.stretch,
++        children: [
++          _Brand(collapsed: collapsed, isDark: isDark),
++          Divider(height: 1, color: c.divider),
++          Expanded(
++            child: ListView(
++              padding: EdgeInsets.symmetric(
++                horizontal: collapsed ? AdipsSizes.sm : AdipsSizes.md,
++                vertical: AdipsSizes.md,
++              ),
++              children: [
++                for (final item in AdipsNav.items)
++                  Padding(
++                    padding: const EdgeInsets.only(bottom: AdipsSizes.xs),
++                    child: _NavTile(
++                      item: item,
++                      selected: item.matches(location),
++                      collapsed: collapsed,
++                      accent: accent,
++                      onTap: () => onNavigate(item.path),
++                    ),
++                  ),
++              ],
++            ),
++          ),
++          if (!collapsed)
++            Padding(
++              padding: const EdgeInsets.all(AdipsSizes.md),
++              child: Text(
++                'ADIPS Web v1.0.0',
++                style: TextStyle(color: c.textHint, fontSize: AdipsSizes.fontSizesEs),
++              ),
++            ),
++        ],
++      ),
++    );
++  }
++}
++
++class _Brand extends StatelessWidget {
++  const _Brand({required this.collapsed, required this.isDark});
++
++  final bool collapsed;
++  final bool isDark;
++
++  @override
++  Widget build(BuildContext context) {
++    final fallback = Text(
++      'ADIPS',
++      style: TextStyle(
++        fontWeight: FontWeight.w700,
++        color: Theme.of(context).extension<AdipsColors>()!.textPrimary,
++      ),
++    );
++
++    Widget logo;
++    if (collapsed) {
++      logo = Image.asset(
++        isDark ? WebAssets.symbolOnDark : WebAssets.symbolOnLight,
++        height: 36,
++        width: 36,
++        errorBuilder: (context, error, stackTrace) => fallback,
++      );
++    } else {
++      // The horizontal artwork has generous transparent padding; crop it to a
++      // fixed-height strip so it reads at sidebar size.
++      logo = SizedBox(
++        height: 56,
++        child: ClipRect(
++          child: OverflowBox(
++            maxHeight: 130,
++            maxWidth: 260,
++            child: Image.asset(
++              isDark
++                  ? WebAssets.horizontalLogoOnDark
++                  : WebAssets.horizontalLogoOnLight,
++              height: 130,
++              width: 260,
++              fit: BoxFit.contain,
++              errorBuilder: (context, error, stackTrace) => fallback,
++            ),
++          ),
++        ),
++      );
++    }
++
++    return SizedBox(
++      height: 72,
++      child: Center(child: logo),
++    );
++  }
++}
++
++class _NavTile extends StatelessWidget {
++  const _NavTile({
++    required this.item,
++    required this.selected,
++    required this.collapsed,
++    required this.accent,
++    required this.onTap,
++  });
++
++  final NavItem item;
++  final bool selected;
++  final bool collapsed;
++  final Color accent;
++  final VoidCallback onTap;
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Theme.of(context).extension<AdipsColors>()!;
++    final color = selected ? accent : c.textMuted;
++    final radius = BorderRadius.circular(AdipsSizes.borderRadiusMd);
++
++    final tile = Semantics(
++      button: true,
++      selected: selected,
++      label: item.label,
++      child: Material(
++        color: Colors.transparent,
++        child: InkWell(
++          borderRadius: radius,
++          onTap: onTap,
++          child: Container(
++            height: 44,
++            padding: const EdgeInsets.symmetric(horizontal: 12),
++            decoration: BoxDecoration(
++              color: selected ? accent.withValues(alpha: 0.14) : null,
++              borderRadius: radius,
++            ),
++            child: Row(
++              mainAxisAlignment:
++                  collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
++              children: [
++                Icon(selected ? item.selectedIcon : item.icon, color: color, size: 22),
++                if (!collapsed) ...[
++                  const SizedBox(width: 12),
++                  Expanded(
++                    child: Text(
++                      item.label,
++                      maxLines: 1,
++                      overflow: TextOverflow.ellipsis,
++                      style: TextStyle(
++                        color: color,
++                        fontSize: AdipsSizes.fontSizesSm,
++                        fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
++                      ),
++                    ),
++                  ),
++                ],
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++
++    return collapsed ? Tooltip(message: item.label, child: tile) : tile;
++  }
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 9d43561..933ca38 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -1,5 +1,5 @@
+ name: adips_web
+-description: "Provides secure user account management with authentication, transaction tracking, income/expense summaries, account management, and money transfers. It also supports filtering, searching, sorting, pagination, balance adjustments, archiving, and transaction management for better financial organization."
++description: "ADIPS Web - responsive Flutter Web client for the ADIPS personal finance app: authentication, transactions, transfers, accounts, categories and settings on top of the existing ADIPS backend."
+ publish_to: 'none'
+ version: 1.0.0+1
+ 
+@@ -9,51 +9,34 @@ environment:
+ dependencies:
+   flutter:
+     sdk: flutter
++  flutter_web_plugins:
++    sdk: flutter
+ 
+   cupertino_icons: ^1.0.8
+ 
++  # Same state/DI + local storage stack as the mobile app (adips_app),
++  # so shared controllers can be reused without rewrites.
++  get: ^4.7.3
++  get_storage: ^2.1.1
++
++  # URL-based routing, deep links and the persistent web shell.
++  go_router: ^17.0.0
++
++  # http / intl / etc. are added by the patch that first needs them
++  # (see docs/DEVELOPMENT_PATCHES.md).
++
+ dev_dependencies:
+   flutter_test:
+     sdk: flutter
+-
+   flutter_lints: ^6.0.0
+ 
+ flutter:
+-
+   uses-material-design: true
+ 
+-#---------- LOCAL ASSETS ----------#
+-assets:
+-  - assets/logos/
+-  - assets/images/
+-  - assets/images/onboard_images
+-  - assets/icons/
+-  
+-  
+-  
+-
+-  
+-  
+-
+-  
+-  
+-
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
+-  
++  # NOTE: this block previously sat outside `flutter:` so no asset was
++  # actually registered. It must stay nested here.
++  assets:
++    - assets/logos/
++    - assets/images/
++    - assets/images/onboard_images/
++    - assets/icons/brands/
+diff --git a/test/widget_test.dart b/test/widget_test.dart
+index a7c947c..4683a5d 100644
+--- a/test/widget_test.dart
++++ b/test/widget_test.dart
+@@ -1,30 +1,55 @@
+-// This is a basic Flutter widget test.
+-//
+-// To perform an interaction with a widget in your test, use the WidgetTester
+-// utility in the flutter_test package. For example, you can send tap and scroll
+-// gestures. You can also use WidgetTester to find child widgets in the widget
+-// tree, read text, and verify that the values of widget properties are correct.
+-
++import 'package:adips_web/core/responsive/breakpoints.dart';
++import 'package:adips_web/core/theme/adips_app_theme.dart';
++import 'package:adips_web/web/layout/nav_items.dart';
++import 'package:adips_web/web/layout/web_sidebar.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_test/flutter_test.dart';
+ 
+-import 'package:adips_web/main.dart';
+-
+ void main() {
+-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
+-    // Build our app and trigger a frame.
+-    await tester.pumpWidget(const MyApp());
++  group('Breakpoints', () {
++    test('classifies widths per the plan', () {
++      expect(Breakpoints.fromWidth(500), ScreenSize.compact);
++      expect(Breakpoints.fromWidth(767.9), ScreenSize.compact);
++      expect(Breakpoints.fromWidth(768), ScreenSize.medium);
++      expect(Breakpoints.fromWidth(1199), ScreenSize.medium);
++      expect(Breakpoints.fromWidth(1200), ScreenSize.expanded);
++    });
++  });
+ 
+-    // Verify that our counter starts at 0.
+-    expect(find.text('0'), findsOneWidget);
+-    expect(find.text('1'), findsNothing);
++  group('AdipsNav', () {
++    test('highlights the right item for sub-routes', () {
++      expect(AdipsNav.forLocation('/transactions/42')?.label, 'Transactions');
++      expect(AdipsNav.forLocation('/transfers/add')?.label, 'Transactions');
++      expect(AdipsNav.forLocation('/profile')?.label, 'Settings');
++      expect(AdipsNav.forLocation('/nope'), isNull);
++    });
++
++    test('titles', () {
++      expect(AdipsNav.titleFor('/transactions/add'), 'Add Transaction');
++      expect(AdipsNav.titleFor('/transactions/7'), 'Transaction Details');
++      expect(AdipsNav.titleFor('/accounts'), 'Accounts');
++    });
++  });
+ 
+-    // Tap the '+' icon and trigger a frame.
+-    await tester.tap(find.byIcon(Icons.add));
+-    await tester.pump();
++  testWidgets('sidebar lists every module and reports taps', (tester) async {
++    String? tapped;
++    await tester.pumpWidget(
++      MaterialApp(
++        theme: AdipsAppTheme.darkTheme,
++        home: Scaffold(
++          body: WebSidebar(
++            location: '/dashboard',
++            width: WebSidebar.expandedWidth,
++            onNavigate: (p) => tapped = p,
++          ),
++        ),
++      ),
++    );
+ 
+-    // Verify that our counter has incremented.
+-    expect(find.text('0'), findsNothing);
+-    expect(find.text('1'), findsOneWidget);
++    for (final item in AdipsNav.items) {
++      expect(find.text(item.label), findsOneWidget);
++    }
++    await tester.tap(find.text('Accounts'));
++    expect(tapped, '/accounts');
+   });
+ }
+diff --git a/tools/sync_shared.sh b/tools/sync_shared.sh
+new file mode 100755
+index 0000000..2315a89
+--- /dev/null
++++ b/tools/sync_shared.sh
+@@ -0,0 +1,33 @@
++#!/usr/bin/env bash
++# Copies platform-independent shared code from the mobile app (adips_app)
++# into this web project and rewrites imports so nothing is retyped by hand.
++#
++# Usage:  tools/sync_shared.sh /path/to/adips_app <group> [<group> ...]
++# Groups are added patch by patch (see docs/DEVELOPMENT_PATCHES.md).
++#   theme      lib/utils/theme + palette/sizes/images/text constants   (Patch 01)
++set -euo pipefail
++APP="${1:?path to adips_app required}"; shift
++WEB="$(cd "$(dirname "$0")/.." && pwd)"
++
++rewrite() {
++  # $1 = directory to rewrite. Keep this mapping in sync with the doc.
++  grep -rl "package:adips/" "$1" 2>/dev/null | xargs -r sed -i \
++    -e 's#package:adips/utils/theme/#package:adips_web/core/theme/#g' \
++    -e 's#package:adips/utils/constants/#package:adips_web/core/constants/#g'
++}
++
++for group in "$@"; do
++  case "$group" in
++    theme)
++      mkdir -p "$WEB/lib/core/constants" "$WEB/lib/core/theme"
++      for f in adips_palette sizes image_strings text_strings; do
++        cp "$APP/lib/utils/constants/$f.dart" "$WEB/lib/core/constants/"
++      done
++      cp "$APP/lib/utils/theme/adips_app_theme.dart" "$WEB/lib/core/theme/"
++      cp -r "$APP/lib/utils/theme/custom_theme" "$WEB/lib/core/theme/"
++      rewrite "$WEB/lib/core"
++      ;;
++    *) echo "unknown group: $group" >&2; exit 1 ;;
++  esac
++done
++echo "sync done: $*"
+diff --git a/web/index.html b/web/index.html
+index d69f4f4..ee5c5e6 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -2,45 +2,35 @@
+ <html>
+ <head>
+   <!--
+-    If you are serving your web app in a path other than the root, change the
+-    href value below to reflect the base path you are serving from.
+-
+-    The path provided below has to start and end with a slash "/" in order for
+-    it to work correctly.
+-
+-    For more details:
+-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+-
+-    This is a placeholder for base href that will be replaced by the value of
+-    the `--base-href` argument provided to `flutter build`.
++    $FLUTTER_BASE_HREF is replaced by `flutter build web --base-href ...`.
++    Path URLs (/dashboard) need the host to rewrite unknown paths to
++    index.html (see docs/DEVELOPMENT_PATCHES.md, Patch 01 notes).
+   -->
+   <base href="$FLUTTER_BASE_HREF">
+ 
+   <meta charset="UTF-8">
+   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+-  <meta name="description" content="Provides secure user account management with authentication, transaction tracking, income/expense summaries, account management, and money transfers. It also supports filtering, searching, sorting, pagination, balance adjustments, archiving, and transaction management for better financial organization.">
++  <meta name="viewport" content="width=device-width, initial-scale=1.0">
++  <meta name="description" content="ADIPS - personal finance: accounts, transactions, transfers and insights.">
++  <meta name="theme-color" content="#002218">
+ 
+-  <!-- iOS meta tags & icons -->
+   <meta name="mobile-web-app-capable" content="yes">
++  <meta name="apple-mobile-web-app-capable" content="yes">
+   <meta name="apple-mobile-web-app-status-bar-style" content="black">
+-  <meta name="apple-mobile-web-app-title" content="adips_web">
++  <meta name="apple-mobile-web-app-title" content="ADIPS">
+   <link rel="apple-touch-icon" href="icons/Icon-192.png">
+ 
+-  <!-- Favicon -->
+   <link rel="icon" type="image/png" href="favicon.png"/>
+ 
+-  <title>adips_web</title>
++  <title>ADIPS</title>
+   <link rel="manifest" href="manifest.json">
++
++  <style>
++    /* Match the dark canvas so there is no white flash while Flutter boots. */
++    html, body { margin: 0; height: 100%; background: #002218; }
++  </style>
+ </head>
+ <body>
+-  <!--
+-    You can customize the "flutter_bootstrap.js" script.
+-    This is useful to provide a custom configuration to the Flutter loader
+-    or to give the user feedback during the initialization process.
+-
+-    For more details:
+-    * https://docs.flutter.dev/platform-integration/web/initialization
+-  -->
+   <script src="flutter_bootstrap.js" async></script>
+ </body>
+ </html>
+diff --git a/web/manifest.json b/web/manifest.json
+index 0738496..d8e5057 100644
+--- a/web/manifest.json
++++ b/web/manifest.json
+@@ -1,35 +1,17 @@
+ {
+-    "name": "adips_web",
+-    "short_name": "adips_web",
++    "name": "ADIPS",
++    "short_name": "ADIPS",
+     "start_url": ".",
+     "display": "standalone",
+-    "background_color": "#0175C2",
+-    "theme_color": "#0175C2",
+-    "description": "Provides secure user account management with authentication, transaction tracking, income/expense summaries, account management, and money transfers. It also supports filtering, searching, sorting, pagination, balance adjustments, archiving, and transaction management for better financial organization.",
+-    "orientation": "portrait-primary",
++    "background_color": "#002218",
++    "theme_color": "#002218",
++    "description": "ADIPS - personal finance: accounts, transactions, transfers and insights.",
++    "orientation": "any",
+     "prefer_related_applications": false,
+     "icons": [
+-        {
+-            "src": "icons/Icon-192.png",
+-            "sizes": "192x192",
+-            "type": "image/png"
+-        },
+-        {
+-            "src": "icons/Icon-512.png",
+-            "sizes": "512x512",
+-            "type": "image/png"
+-        },
+-        {
+-            "src": "icons/Icon-maskable-192.png",
+-            "sizes": "192x192",
+-            "type": "image/png",
+-            "purpose": "maskable"
+-        },
+-        {
+-            "src": "icons/Icon-maskable-512.png",
+-            "sizes": "512x512",
+-            "type": "image/png",
+-            "purpose": "maskable"
+-        }
++        { "src": "icons/Icon-192.png", "sizes": "192x192", "type": "image/png" },
++        { "src": "icons/Icon-512.png", "sizes": "512x512", "type": "image/png" },
++        { "src": "icons/Icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
++        { "src": "icons/Icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+     ]
+ }
