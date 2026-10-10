@@ -23,7 +23,7 @@ extension SortOptionQuery on SortOption {
 class TransactionQuery {
   const TransactionQuery({
     this.page = 1,
-    this.limit = 10,
+    this.limit = 20,
     this.sort = SortOption.newestFirst,
     this.search = '',
     this.type,
