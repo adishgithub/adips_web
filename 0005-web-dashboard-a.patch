@@ -1,0 +1,1162 @@
+From fe3ea9ca2bf0b4c07ca6901624dbcfdeabe580b9 Mon Sep 17 00:00:00 2001
+From: adips <a@b.c>
+Date: Sat, 10 Oct 2026 07:16:16 +0000
+Subject: [PATCH] Patch 05: dashboard A (balance, stat cards, account grid)
+
+---
+ lib/routes/app_pages.dart                   |  11 +-
+ lib/web/common/adaptive_grid.dart           |  55 ++++++
+ lib/web/dashboard/account_card_grid.dart    | 187 +++++++++++++++++++
+ lib/web/dashboard/balance_card.dart         |  97 ++++++++++
+ lib/web/dashboard/dashboard_controller.dart | 157 ++++++++++++++++
+ lib/web/dashboard/stat_cards.dart           | 127 +++++++++++++
+ lib/web/dashboard/web_dashboard_page.dart   | 188 ++++++++++++++++++++
+ test/dashboard_controller_test.dart         | 104 +++++++++++
+ test/dashboard_widgets_test.dart            | 142 +++++++++++++++
+ 9 files changed, 1067 insertions(+), 1 deletion(-)
+ create mode 100644 lib/web/common/adaptive_grid.dart
+ create mode 100644 lib/web/dashboard/account_card_grid.dart
+ create mode 100644 lib/web/dashboard/balance_card.dart
+ create mode 100644 lib/web/dashboard/dashboard_controller.dart
+ create mode 100644 lib/web/dashboard/stat_cards.dart
+ create mode 100644 lib/web/dashboard/web_dashboard_page.dart
+ create mode 100644 test/dashboard_controller_test.dart
+ create mode 100644 test/dashboard_widgets_test.dart
+
+diff --git a/lib/routes/app_pages.dart b/lib/routes/app_pages.dart
+index 2f66fe7..175f30b 100644
+--- a/lib/routes/app_pages.dart
++++ b/lib/routes/app_pages.dart
+@@ -8,6 +8,8 @@ import '../web/auth/web_onboarding_page.dart';
+ import '../web/auth/web_register_page.dart';
+ import '../web/common/coming_soon_page.dart';
+ import '../web/common/not_found_page.dart';
++import '../web/dashboard/dashboard_controller.dart';
++import '../web/dashboard/web_dashboard_page.dart';
+ 
+ /// Redirects when there is no saved token: first-time visitors see
+ /// /onboarding, returning ones /login. (A token that the
+@@ -63,7 +65,14 @@ class AppPages {
+       middlewares: [GuestGuard()],
+       page: () => const WebOnboardingPage(),
+     ),
+-    _page('/dashboard', 'Dashboard', 'Phase 3'),
++    GetPage(
++      name: '/dashboard',
++      middlewares: [AuthGuard()],
++      // Created per visit and disposed when the route is left, so a new
++      // sign-in never sees the previous user's numbers.
++      binding: BindingsBuilder.put(() => DashboardController()),
++      page: () => const WebDashboardPage(),
++    ),
+     _page('/transactions', 'Transactions', 'Phase 4'),
+     _page('/accounts', 'Accounts', 'Phase 6'),
+     _page('/categories', 'Categories', 'Phase 7'),
+diff --git a/lib/web/common/adaptive_grid.dart b/lib/web/common/adaptive_grid.dart
+new file mode 100644
+index 0000000..4babbc2
+--- /dev/null
++++ b/lib/web/common/adaptive_grid.dart
+@@ -0,0 +1,55 @@
++import 'dart:math' as math;
++
++import 'package:flutter/material.dart';
++
++/// Number of columns that fit in [width]: as many as fit at [minItemWidth]
++/// (with [spacing] between them), at least 1 and at most [maxColumns].
++int adaptiveColumns(
++  double width, {
++  required double minItemWidth,
++  required int maxColumns,
++  double spacing = 16,
++}) {
++  if (!width.isFinite || width <= 0) return 1;
++  final fit = ((width + spacing) / (minItemWidth + spacing)).floor();
++  return math.max(1, math.min(maxColumns, fit));
++}
++
++/// Lays children out in equal-width columns that follow the available width
++/// (rows wrap). Unlike GridView it sizes itself to its children, so it can
++/// sit inside a scrolling page.
++class AdaptiveGrid extends StatelessWidget {
++  const AdaptiveGrid({
++    super.key,
++    required this.children,
++    required this.minItemWidth,
++    this.maxColumns = 4,
++    this.spacing = 16,
++  });
++
++  final List<Widget> children;
++  final double minItemWidth;
++  final int maxColumns;
++  final double spacing;
++
++  @override
++  Widget build(BuildContext context) {
++    return LayoutBuilder(builder: (context, constraints) {
++      final columns = adaptiveColumns(
++        constraints.maxWidth,
++        minItemWidth: minItemWidth,
++        maxColumns: maxColumns,
++        spacing: spacing,
++      );
++      final itemWidth =
++          (constraints.maxWidth - spacing * (columns - 1)) / columns;
++      return Wrap(
++        spacing: spacing,
++        runSpacing: spacing,
++        children: [
++          for (final child in children) SizedBox(width: itemWidth, child: child),
++        ],
++      );
++    });
++  }
++}
+diff --git a/lib/web/dashboard/account_card_grid.dart b/lib/web/dashboard/account_card_grid.dart
+new file mode 100644
+index 0000000..966c8cf
+--- /dev/null
++++ b/lib/web/dashboard/account_card_grid.dart
+@@ -0,0 +1,187 @@
++import 'package:flutter/material.dart';
++
++import '../../utils/constants/adips_category_colors.dart';
++import '../../utils/constants/adips_icons.dart';
++import '../../utils/constants/adips_palette.dart';
++import '../../utils/constants/sizes.dart';
++import '../../utils/helpers/helper_functions.dart';
++import '../../utils/models/account_model.dart';
++import '../common/adaptive_grid.dart';
++
++/// Account cards in a responsive grid (up to 4 columns). Tapping a card calls
++/// [onTap]; the card for [selectedId] is highlighted. With no accounts and an
++/// [onAddAccount], an "Add account" prompt is shown instead.
++class AccountCardGrid extends StatelessWidget {
++  const AccountCardGrid({
++    super.key,
++    required this.accounts,
++    this.selectedId,
++    this.onTap,
++    this.onAddAccount,
++  });
++
++  final List<AccountModel> accounts;
++  final int? selectedId;
++  final ValueChanged<AccountModel>? onTap;
++  final VoidCallback? onAddAccount;
++
++  @override
++  Widget build(BuildContext context) {
++    if (accounts.isEmpty) {
++      return onAddAccount == null
++          ? const SizedBox.shrink()
++          : _NoAccounts(onAdd: onAddAccount!);
++    }
++    return AdaptiveGrid(
++      minItemWidth: 230,
++      maxColumns: 4,
++      children: [
++        for (final a in accounts)
++          AccountCard(
++            account: a,
++            isSelected: a.id == selectedId,
++            onTap: onTap == null ? null : () => onTap!(a),
++          ),
++      ],
++    );
++  }
++}
++
++class AccountCard extends StatelessWidget {
++  const AccountCard({
++    super.key,
++    required this.account,
++    required this.isSelected,
++    this.onTap,
++  });
++
++  final AccountModel account;
++  final bool isSelected;
++  final VoidCallback? onTap;
++
++  @override
++  Widget build(BuildContext context) {
++    final isDark = AdipsHelperFunctions.isDarkMode(context);
++    final surface = isDark ? AdipsPalette.darkTextField : AdipsPalette.lightTextField;
++    final line = isDark ? AdipsPalette.darkLine : AdipsPalette.lightLine;
++    final text = isDark ? AdipsPalette.darkTextPrimary : AdipsPalette.lightTextPrimary;
++    final muted = isDark ? AdipsPalette.darkTextMuted : AdipsPalette.lightTextMuted;
++    final loss = isDark ? AdipsPalette.darkLoss : AdipsPalette.lightLoss;
++    final brand = isDark ? AdipsPalette.darkPrimaryBrandText : AdipsPalette.lightPrimaryBrandText;
++    final accent = AdipsCategoryColors.byId(account.colorId);
++    final negative = account.currentBalance < 0;
++    final radius = BorderRadius.circular(AdipsSizes.borderRadiusSm);
++
++    return Opacity(
++      opacity: account.includeInTotal ? 1 : 0.65,
++      child: Material(
++        color: surface,
++        borderRadius: radius,
++        child: InkWell(
++          onTap: onTap,
++          borderRadius: radius,
++          child: Container(
++            padding: const EdgeInsets.all(AdipsSizes.md),
++            decoration: BoxDecoration(
++              borderRadius: radius,
++              border: Border.all(
++                color: isSelected ? brand : line,
++                width: isSelected ? 1.5 : 1,
++              ),
++            ),
++            child: Column(
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                Row(
++                  children: [
++                    CircleAvatar(
++                      radius: 16,
++                      backgroundColor: accent.withValues(alpha: 0.15),
++                      child: Icon(AdipsIcons.byId(account.iconId),
++                          color: accent, size: 17),
++                    ),
++                    const SizedBox(width: 10),
++                    Expanded(
++                      child: Text(account.name,
++                          maxLines: 1,
++                          overflow: TextOverflow.ellipsis,
++                          style: TextStyle(
++                              fontSize: 14,
++                              fontWeight: FontWeight.w600,
++                              color: text)),
++                    ),
++                    if (account.isDefault)
++                      Container(
++                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
++                        decoration: BoxDecoration(
++                          color: brand.withValues(alpha: 0.12),
++                          borderRadius: BorderRadius.circular(6),
++                        ),
++                        child: Text('Default',
++                            style: TextStyle(fontSize: 10, color: brand)),
++                      ),
++                  ],
++                ),
++                const SizedBox(height: AdipsSizes.md),
++                FittedBox(
++                  fit: BoxFit.scaleDown,
++                  alignment: Alignment.centerLeft,
++                  child: Text(
++                    AdipsFormatters.money(account.currentBalance, account.currency),
++                    style: TextStyle(
++                        fontSize: 20,
++                        fontWeight: FontWeight.w700,
++                        color: negative ? loss : text),
++                  ),
++                ),
++                const SizedBox(height: 4),
++                Text(
++                  account.includeInTotal
++                      ? AccountTypeInfo.of(account.type).label
++                      : '${AccountTypeInfo.of(account.type).label} · not included in total',
++                  maxLines: 1,
++                  overflow: TextOverflow.ellipsis,
++                  style: TextStyle(fontSize: 11, color: muted),
++                ),
++              ],
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++}
++
++class _NoAccounts extends StatelessWidget {
++  const _NoAccounts({required this.onAdd});
++
++  final VoidCallback onAdd;
++
++  @override
++  Widget build(BuildContext context) {
++    final isDark = AdipsHelperFunctions.isDarkMode(context);
++    final surface = isDark ? AdipsPalette.darkTextField : AdipsPalette.lightTextField;
++    final line = isDark ? AdipsPalette.darkLine : AdipsPalette.lightLine;
++    final muted = isDark ? AdipsPalette.darkTextMuted : AdipsPalette.lightTextMuted;
++
++    return Container(
++      width: double.infinity,
++      padding: const EdgeInsets.all(AdipsSizes.md),
++      decoration: BoxDecoration(
++        color: surface,
++        borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++        border: Border.all(color: line),
++      ),
++      child: Wrap(
++        crossAxisAlignment: WrapCrossAlignment.center,
++        spacing: AdipsSizes.sm,
++        children: [
++          Icon(Icons.account_balance_wallet_outlined, color: muted),
++          Text('No accounts yet. Add one to start tracking balances.',
++              style: TextStyle(color: muted)),
++          TextButton(onPressed: onAdd, child: const Text('Add account')),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/lib/web/dashboard/balance_card.dart b/lib/web/dashboard/balance_card.dart
+new file mode 100644
+index 0000000..4a3d001
+--- /dev/null
++++ b/lib/web/dashboard/balance_card.dart
+@@ -0,0 +1,97 @@
++import 'package:flutter/material.dart';
++
++import '../../utils/constants/adips_palette.dart';
++import '../../utils/constants/sizes.dart';
++import '../../utils/helpers/helper_functions.dart';
++import '../../utils/models/account_model.dart';
++
++/// Total balance of the accounts counted in the total (from
++/// /accounts/summary). Totals are per currency and never added together: the
++/// first is the headline, others are smaller lines below it.
++class BalanceCard extends StatelessWidget {
++  const BalanceCard({
++    super.key,
++    required this.totals,
++    this.fallbackCurrency = 'INR',
++  });
++
++  final List<AccountSummaryTotal> totals;
++  final String fallbackCurrency;
++
++  @override
++  Widget build(BuildContext context) {
++    final primary = totals.isNotEmpty
++        ? totals.first
++        : AccountSummaryTotal(currency: fallbackCurrency, totalBalance: 0);
++    final others = totals.length > 1 ? totals.sublist(1) : const <AccountSummaryTotal>[];
++
++    return ClipRRect(
++      borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      child: Container(
++        width: double.infinity,
++        padding: const EdgeInsets.all(AdipsSizes.lg),
++        decoration: const BoxDecoration(
++          gradient: LinearGradient(
++            begin: Alignment.topLeft,
++            end: Alignment.bottomRight,
++            colors: [
++              AdipsPalette.darkPrimaryBrandText,
++              AdipsPalette.lightPrimaryBrandText,
++            ],
++          ),
++        ),
++        child: Stack(
++          clipBehavior: Clip.hardEdge,
++          children: [
++            Positioned(
++              right: -10,
++              bottom: -24,
++              child: Opacity(
++                opacity: 0.15,
++                child: const Icon(Icons.account_balance,
++                    size: 140, color: Colors.white),
++              ),
++            ),
++            Column(
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                Text(
++                  'Total Balance',
++                  style: TextStyle(
++                    color: Colors.white.withValues(alpha: 0.85),
++                    fontSize: AdipsSizes.fontSizesSm,
++                  ),
++                ),
++                const SizedBox(height: AdipsSizes.xs),
++                FittedBox(
++                  fit: BoxFit.scaleDown,
++                  alignment: Alignment.centerLeft,
++                  child: Text(
++                    AdipsFormatters.money(primary.totalBalance, primary.currency),
++                    key: const Key('total-balance'),
++                    style: const TextStyle(
++                      color: Colors.white,
++                      fontSize: 36,
++                      fontWeight: FontWeight.w600,
++                    ),
++                  ),
++                ),
++                for (final other in others) ...[
++                  const SizedBox(height: 4),
++                  Text(
++                    '+ ${AdipsFormatters.money(other.totalBalance, other.currency)}',
++                    style: TextStyle(
++                      color: Colors.white.withValues(alpha: 0.9),
++                      fontSize: 15,
++                      fontWeight: FontWeight.w500,
++                    ),
++                  ),
++                ],
++              ],
++            ),
++          ],
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/web/dashboard/dashboard_controller.dart b/lib/web/dashboard/dashboard_controller.dart
+new file mode 100644
+index 0000000..ed3fa47
+--- /dev/null
++++ b/lib/web/dashboard/dashboard_controller.dart
+@@ -0,0 +1,157 @@
++import 'package:get/get.dart';
++
++import '../../data/services/account_service.dart';
++import '../../utils/http/http_client.dart';
++import '../../utils/models/account_model.dart';
++import '../../utils/models/app_transaction.dart';
++import '../../utils/services/transaction_api.dart';
++
++/// State for the dashboard (Patch 05: balances + stat cards + accounts).
++/// Widgets only read this; all HTTP goes through the existing services.
++class DashboardController extends GetxController {
++  final AccountService _accounts = AccountService();
++
++  final RxList<AccountModel> accounts = <AccountModel>[].obs;
++  final Rx<AccountSummaryModel> accountSummary =
++      AccountSummaryModel.empty.obs;
++  final Rx<TransactionSummary> stats = TransactionSummary.empty.obs;
++
++  final RxBool isLoading = false.obs;
++  final RxBool isRefreshing = false.obs; // quiet reload / filter change
++  final RxnString loadError = RxnString();
++  final RxnString refreshError = RxnString();
++  final RxnInt selectedAccountId = RxnInt();
++
++  bool _loadedOnce = false;
++  bool get hasLoaded => _loadedOnce;
++  int _seq = 0; // ignores out-of-order responses
++
++  @override
++  void onInit() {
++    super.onInit();
++    loadAll();
++  }
++
++  AccountModel? byId(int id) {
++    for (final a in accounts) {
++      if (a.id == id) return a;
++    }
++    return null;
++  }
++
++  AccountModel? get selectedAccount {
++    final id = selectedAccountId.value;
++    return id == null ? null : byId(id);
++  }
++
++  AccountModel? get defaultAccount {
++    if (accounts.isEmpty) return null;
++    return accounts.firstWhere((a) => a.isDefault,
++        orElse: () => accounts.first);
++  }
++
++  /// Currency of the income/expense figures: the selected account's, else the
++  /// first total's (same rule as mobile; totals are never converted).
++  String get statsCurrency {
++    final selected = selectedAccount;
++    if (selected != null) return selected.currency;
++    final totals = accountSummary.value.totals;
++    if (totals.isNotEmpty) return totals.first.currency;
++    return defaultAccount?.currency ?? 'INR';
++  }
++
++  /// First load / "Try again": shows the full-page spinner. Uses the long
++  /// cold-start timeout because the free Render server may be asleep.
++  Future<void> loadAll() async {
++    final seq = ++_seq;
++    var dropped = false;
++    isLoading.value = true;
++    loadError.value = null;
++    try {
++      const timeout = AdipsHttpHelper.coldStartTimeout;
++      final results = await Future.wait<Object>([
++        _accounts.list(timeout: timeout),
++        _accounts.summary(timeout: timeout),
++        TransactionApi.summary(
++            accountId: selectedAccountId.value, timeout: timeout),
++      ]);
++      if (seq != _seq) return;
++      accounts.assignAll(results[0] as List<AccountModel>);
++      accountSummary.value = results[1] as AccountSummaryModel;
++      stats.value = results[2] as TransactionSummary;
++      _loadedOnce = true;
++      dropped = _dropStaleSelection();
++    } catch (e) {
++      if (seq != _seq) return;
++      loadError.value = _message(e);
++    } finally {
++      if (seq == _seq) isLoading.value = false;
++    }
++    if (dropped) await refresh();
++  }
++
++  /// Quiet reload (no spinner): after changes made elsewhere. A failure keeps
++  /// the old numbers and sets [refreshError] for an inline banner.
++  Future<void> refresh() async {
++    final seq = ++_seq;
++    var dropped = false;
++    isRefreshing.value = true;
++    refreshError.value = null;
++    try {
++      final results = await Future.wait<Object>([
++        _accounts.list(),
++        _accounts.summary(),
++        TransactionApi.summary(accountId: selectedAccountId.value),
++      ]);
++      if (seq != _seq) return;
++      accounts.assignAll(results[0] as List<AccountModel>);
++      accountSummary.value = results[1] as AccountSummaryModel;
++      stats.value = results[2] as TransactionSummary;
++      dropped = _dropStaleSelection();
++    } catch (e) {
++      if (seq != _seq) return;
++      refreshError.value = _message(e);
++    } finally {
++      if (seq == _seq) isRefreshing.value = false;
++    }
++    if (dropped) await refresh();
++  }
++
++  /// Tap an account to filter the stat cards to it; tap it again (or pass
++  /// null) to go back to all accounts. Balances never depend on the filter.
++  Future<void> selectAccount(int? id) async {
++    final previous = selectedAccountId.value;
++    final next = id == previous ? null : id;
++    if (next == previous) return;
++
++    selectedAccountId.value = next; // highlight immediately
++    final seq = ++_seq;
++    isRefreshing.value = true;
++    refreshError.value = null;
++    try {
++      final result = await TransactionApi.summary(accountId: next);
++      if (seq != _seq) return;
++      stats.value = result;
++    } catch (e) {
++      if (seq != _seq) return;
++      selectedAccountId.value = previous; // highlight = data shown
++      refreshError.value = _message(e);
++    } finally {
++      if (seq == _seq) isRefreshing.value = false;
++    }
++  }
++
++  /// If the filtered account is gone (archived/deleted elsewhere), go back to
++  /// "All". Returns true when that happened, so the caller reloads the stats.
++  bool _dropStaleSelection() {
++    final id = selectedAccountId.value;
++    if (id != null && byId(id) == null) {
++      selectedAccountId.value = null;
++      return true;
++    }
++    return false;
++  }
++
++  static String _message(Object e) =>
++      e.toString().replaceFirst('Exception: ', '');
++}
+diff --git a/lib/web/dashboard/stat_cards.dart b/lib/web/dashboard/stat_cards.dart
+new file mode 100644
+index 0000000..ce79569
+--- /dev/null
++++ b/lib/web/dashboard/stat_cards.dart
+@@ -0,0 +1,127 @@
++import 'package:flutter/material.dart';
++
++import '../../utils/constants/adips_palette.dart';
++import '../../utils/constants/sizes.dart';
++import '../../utils/helpers/helper_functions.dart';
++import '../common/adaptive_grid.dart';
++
++/// Income / expenses / transaction count (from /transactions/summary).
++class StatCards extends StatelessWidget {
++  const StatCards({
++    super.key,
++    required this.totalIncome,
++    required this.totalExpenses,
++    required this.totalTransactions,
++    this.currency = 'INR',
++  });
++
++  final double totalIncome;
++  final double totalExpenses;
++  final int totalTransactions;
++  final String currency;
++
++  @override
++  Widget build(BuildContext context) {
++    final isDark = AdipsHelperFunctions.isDarkMode(context);
++    final gain = isDark ? AdipsPalette.darkGain : AdipsPalette.lightGain;
++    final loss = isDark ? AdipsPalette.darkLoss : AdipsPalette.lightLoss;
++    final action = isDark ? AdipsPalette.darkAction : AdipsPalette.lightAction;
++    final text = isDark ? AdipsPalette.darkTextPrimary : AdipsPalette.lightTextPrimary;
++
++    return AdaptiveGrid(
++      minItemWidth: 220,
++      maxColumns: 3,
++      children: [
++        _StatCard(
++          icon: Icons.trending_up_rounded,
++          color: gain,
++          label: 'Total Income',
++          value: AdipsFormatters.money(totalIncome, currency),
++          valueColor: gain,
++        ),
++        _StatCard(
++          icon: Icons.trending_down_rounded,
++          color: loss,
++          label: 'Total Expenses',
++          value: AdipsFormatters.money(totalExpenses, currency),
++          valueColor: loss,
++        ),
++        _StatCard(
++          icon: Icons.description_outlined,
++          color: action,
++          label: 'Total Transactions',
++          value: '$totalTransactions',
++          valueColor: text,
++        ),
++      ],
++    );
++  }
++}
++
++class _StatCard extends StatelessWidget {
++  const _StatCard({
++    required this.icon,
++    required this.color,
++    required this.label,
++    required this.value,
++    required this.valueColor,
++  });
++
++  final IconData icon;
++  final Color color;
++  final String label;
++  final String value;
++  final Color valueColor;
++
++  @override
++  Widget build(BuildContext context) {
++    final isDark = AdipsHelperFunctions.isDarkMode(context);
++    final surface = isDark ? AdipsPalette.darkTextField : AdipsPalette.lightTextField;
++    final line = isDark ? AdipsPalette.darkLine : AdipsPalette.lightLine;
++    final muted = isDark ? AdipsPalette.darkTextMuted : AdipsPalette.lightTextMuted;
++
++    return Container(
++      padding: const EdgeInsets.all(AdipsSizes.md),
++      decoration: BoxDecoration(
++        color: surface,
++        borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++        border: Border.all(color: line),
++      ),
++      child: Row(
++        children: [
++          Container(
++            padding: const EdgeInsets.all(10),
++            decoration: BoxDecoration(
++              color: color.withValues(alpha: 0.12),
++              shape: BoxShape.circle,
++            ),
++            child: Icon(icon, size: 22, color: color),
++          ),
++          const SizedBox(width: AdipsSizes.md),
++          Expanded(
++            child: Column(
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                Text(label,
++                    maxLines: 1,
++                    overflow: TextOverflow.ellipsis,
++                    style: TextStyle(fontSize: 12, color: muted)),
++                const SizedBox(height: 4),
++                FittedBox(
++                  fit: BoxFit.scaleDown,
++                  alignment: Alignment.centerLeft,
++                  child: Text(value,
++                      maxLines: 1,
++                      style: TextStyle(
++                          fontSize: 20,
++                          fontWeight: FontWeight.w700,
++                          color: valueColor)),
++                ),
++              ],
++            ),
++          ),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/lib/web/dashboard/web_dashboard_page.dart b/lib/web/dashboard/web_dashboard_page.dart
+new file mode 100644
+index 0000000..dcf77d8
+--- /dev/null
++++ b/lib/web/dashboard/web_dashboard_page.dart
+@@ -0,0 +1,188 @@
++import 'package:flutter/material.dart';
++import 'package:get/get.dart';
++
++import '../../utils/constants/sizes.dart';
++import '../layout/web_shell.dart';
++import 'account_card_grid.dart';
++import 'balance_card.dart';
++import 'dashboard_controller.dart';
++import 'stat_cards.dart';
++
++/// /dashboard. Patch 05: total balance, income/expense/count cards and the
++/// account grid. (Filters, search and recent transactions come in Patch 06.)
++class WebDashboardPage extends StatelessWidget {
++  const WebDashboardPage({super.key});
++
++  @override
++  Widget build(BuildContext context) {
++    final c = Get.find<DashboardController>();
++    return WebShell(
++      title: 'Dashboard',
++      route: '/dashboard',
++      child: Obx(() {
++        if (c.loadError.value != null) {
++          return DashboardErrorView(
++              message: c.loadError.value!, onRetry: c.loadAll);
++        }
++        if (c.isLoading.value && !c.hasLoaded) {
++          return const DashboardLoadingView();
++        }
++        return RefreshIndicator(
++          onRefresh: c.refresh,
++          child: SingleChildScrollView(
++            physics: const AlwaysScrollableScrollPhysics(),
++            padding: const EdgeInsets.all(AdipsSizes.lg),
++            child: DashboardBody(controller: c),
++          ),
++        );
++      }),
++    );
++  }
++}
++
++class DashboardLoadingView extends StatelessWidget {
++  const DashboardLoadingView({super.key});
++
++  @override
++  Widget build(BuildContext context) {
++    return Center(
++      child: Column(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          const CircularProgressIndicator(),
++          const SizedBox(height: AdipsSizes.md),
++          Text(
++            'Loading your accounts… the server may take up to 30 seconds to wake up.',
++            textAlign: TextAlign.center,
++            style: Theme.of(context).textTheme.bodyMedium,
++          ),
++        ],
++      ),
++    );
++  }
++}
++
++class DashboardErrorView extends StatelessWidget {
++  const DashboardErrorView(
++      {super.key, required this.message, required this.onRetry});
++
++  final String message;
++  final VoidCallback onRetry;
++
++  @override
++  Widget build(BuildContext context) {
++    return Center(
++      child: Padding(
++        padding: const EdgeInsets.all(AdipsSizes.lg),
++        child: ConstrainedBox(
++          constraints: const BoxConstraints(maxWidth: 420),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            children: [
++              const Icon(Icons.cloud_off_outlined, size: 48),
++              const SizedBox(height: AdipsSizes.md),
++              Text('Could not load your dashboard',
++                  style: Theme.of(context).textTheme.titleMedium),
++              const SizedBox(height: AdipsSizes.sm),
++              Text(message, textAlign: TextAlign.center),
++              const SizedBox(height: AdipsSizes.lg),
++              ElevatedButton(onPressed: onRetry, child: const Text('Try again')),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++}
++
++/// The dashboard content. Public so Patch 06 can extend it and tests can
++/// pump it with a controller.
++class DashboardBody extends StatelessWidget {
++  const DashboardBody({super.key, required this.controller});
++
++  final DashboardController controller;
++
++  @override
++  Widget build(BuildContext context) {
++    final c = controller;
++    return Obx(() {
++      final selected = c.selectedAccount;
++      return Column(
++        crossAxisAlignment: CrossAxisAlignment.start,
++        children: [
++          if (c.isRefreshing.value) ...[
++            const LinearProgressIndicator(minHeight: 2),
++            const SizedBox(height: AdipsSizes.sm),
++          ],
++          if (c.refreshError.value != null) ...[
++            _ErrorBanner(message: c.refreshError.value!, onRetry: c.refresh),
++            const SizedBox(height: AdipsSizes.md),
++          ],
++          BalanceCard(
++            totals: c.accountSummary.value.totals,
++            fallbackCurrency: c.statsCurrency,
++          ),
++          const SizedBox(height: AdipsSizes.lg),
++          if (selected != null)
++            Padding(
++              padding: const EdgeInsets.only(bottom: AdipsSizes.sm),
++              child: Wrap(
++                crossAxisAlignment: WrapCrossAlignment.center,
++                spacing: AdipsSizes.sm,
++                children: [
++                  Text('Showing figures for ${selected.name}'),
++                  TextButton(
++                    onPressed: () => c.selectAccount(null),
++                    child: const Text('Show all'),
++                  ),
++                ],
++              ),
++            ),
++          StatCards(
++            totalIncome: c.stats.value.totalCredit,
++            totalExpenses: c.stats.value.totalDebit,
++            totalTransactions: c.stats.value.count,
++            currency: c.statsCurrency,
++          ),
++          const SizedBox(height: AdipsSizes.lg),
++          Text('Accounts', style: Theme.of(context).textTheme.titleMedium),
++          const SizedBox(height: AdipsSizes.sm),
++          AccountCardGrid(
++            accounts: c.accounts.toList(),
++            selectedId: c.selectedAccountId.value,
++            onTap: (a) => c.selectAccount(a.id),
++            onAddAccount: () => Get.toNamed('/accounts'),
++          ),
++        ],
++      );
++    });
++  }
++}
++
++class _ErrorBanner extends StatelessWidget {
++  const _ErrorBanner({required this.message, required this.onRetry});
++
++  final String message;
++  final VoidCallback onRetry;
++
++  @override
++  Widget build(BuildContext context) {
++    final scheme = Theme.of(context).colorScheme;
++    return Container(
++      padding: const EdgeInsets.all(AdipsSizes.sm),
++      decoration: BoxDecoration(
++        color: scheme.errorContainer,
++        borderRadius: BorderRadius.circular(AdipsSizes.borderRadiusSm),
++      ),
++      child: Wrap(
++        crossAxisAlignment: WrapCrossAlignment.center,
++        spacing: AdipsSizes.sm,
++        children: [
++          Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 18),
++          Text(message, style: TextStyle(color: scheme.onErrorContainer)),
++          TextButton(onPressed: onRetry, child: const Text('Retry')),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/test/dashboard_controller_test.dart b/test/dashboard_controller_test.dart
+new file mode 100644
+index 0000000..80c43ae
+--- /dev/null
++++ b/test/dashboard_controller_test.dart
+@@ -0,0 +1,104 @@
++import 'package:adips_web/utils/http/http_client.dart';
++import 'package:adips_web/web/dashboard/dashboard_controller.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++import 'package:http/testing.dart';
++
++const _accounts = '''
++{"success":true,"data":[
++ {"id":1,"name":"Main","type":"bank","currency":"INR","opening_balance":0,
++  "current_balance":1500,"icon_id":1,"color_id":1,"sort_order":1,
++  "is_default":true,"include_in_total":true,"is_archived":false},
++ {"id":2,"name":"Cash","type":"cash","currency":"USD","opening_balance":0,
++  "current_balance":20,"icon_id":2,"color_id":2,"sort_order":2,
++  "is_default":false,"include_in_total":true,"is_archived":false}]}''';
++
++const _accountSummary = '''
++{"success":true,"data":{"totals":[{"currency":"INR","total_balance":1500},
++ {"currency":"USD","total_balance":20}],"accounts":[]}}''';
++
++String _stats(num credit, num debit, int count) =>
++    '{"success":true,"data":{"total_credit":$credit,"total_debit":$debit,'
++    '"balance":${credit - debit},"transaction_count":$count}}';
++
++void main() {
++  late http.Client original;
++  late List<Uri> requests;
++  late bool failStats;
++
++  setUp(() {
++    original = AdipsHttpHelper.client;
++    requests = [];
++    failStats = false;
++    AdipsHttpHelper.client = MockClient((req) async {
++      requests.add(req.url);
++      final path = req.url.path;
++      if (path.endsWith('/accounts/summary')) {
++        return http.Response(_accountSummary, 200);
++      }
++      if (path.endsWith('/accounts')) return http.Response(_accounts, 200);
++      if (path.endsWith('/transactions/summary')) {
++        if (failStats) return http.Response('{"message":"boom"}', 500);
++        return req.url.queryParameters['account_id'] == '2'
++            ? http.Response(_stats(5, 1, 2), 200)
++            : http.Response(_stats(100, 40, 9), 200);
++      }
++      return http.Response('{}', 404);
++    });
++  });
++
++  tearDown(() => AdipsHttpHelper.client = original);
++
++  test('loadAll fills accounts, totals and stats', () async {
++    final c = DashboardController();
++    await c.loadAll();
++
++    expect(c.loadError.value, isNull);
++    expect(c.isLoading.value, isFalse);
++    expect(c.accounts.length, 2);
++    expect(c.accountSummary.value.totals.first.totalBalance, 1500);
++    expect(c.stats.value.totalCredit, 100);
++    expect(c.stats.value.count, 9);
++    expect(c.statsCurrency, 'INR'); // first total
++  });
++
++  test('selecting an account re-fetches stats for it; again clears it',
++      () async {
++    final c = DashboardController();
++    await c.loadAll();
++
++    await c.selectAccount(2);
++    expect(c.selectedAccountId.value, 2);
++    expect(c.stats.value.count, 2);
++    expect(c.statsCurrency, 'USD'); // the selected account's
++    expect(requests.last.queryParameters['account_id'], '2');
++
++    await c.selectAccount(2); // same card again = back to all
++    expect(c.selectedAccountId.value, isNull);
++    expect(c.stats.value.count, 9);
++  });
++
++  test('a failed filter keeps the previous selection and reports an error',
++      () async {
++    final c = DashboardController();
++    await c.loadAll();
++
++    failStats = true;
++    await c.selectAccount(2);
++
++    expect(c.selectedAccountId.value, isNull);
++    expect(c.stats.value.count, 9);
++    expect(c.refreshError.value, isNotNull);
++    expect(c.isRefreshing.value, isFalse);
++  });
++
++  test('a failed first load sets loadError and clears the spinner', () async {
++    failStats = true;
++    final c = DashboardController();
++    await c.loadAll();
++
++    expect(c.loadError.value, isNotNull);
++    expect(c.isLoading.value, isFalse);
++    expect(c.hasLoaded, isFalse);
++  });
++}
+diff --git a/test/dashboard_widgets_test.dart b/test/dashboard_widgets_test.dart
+new file mode 100644
+index 0000000..4932433
+--- /dev/null
++++ b/test/dashboard_widgets_test.dart
+@@ -0,0 +1,142 @@
++import 'package:adips_web/utils/models/account_model.dart';
++import 'package:adips_web/utils/theme/adips_app_theme.dart';
++import 'package:adips_web/web/common/adaptive_grid.dart';
++import 'package:adips_web/web/dashboard/account_card_grid.dart';
++import 'package:adips_web/web/dashboard/balance_card.dart';
++import 'package:adips_web/web/dashboard/stat_cards.dart';
++import 'package:flutter/material.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++AccountModel account({
++  int id = 1,
++  String name = 'Main',
++  double balance = 1000,
++  bool isDefault = false,
++  bool includeInTotal = true,
++}) =>
++    AccountModel(
++      id: id,
++      name: name,
++      type: 'bank',
++      currency: 'INR',
++      openingBalance: 0,
++      currentBalance: balance,
++      iconId: 1,
++      colorId: 1,
++      sortOrder: id,
++      isDefault: isDefault,
++      includeInTotal: includeInTotal,
++      isArchived: false,
++    );
++
++Future<void> pump(WidgetTester tester, Widget child, {double width = 1200}) async {
++  tester.view.physicalSize = Size(width, 900);
++  tester.view.devicePixelRatio = 1.0;
++  addTearDown(tester.view.reset);
++  await tester.pumpWidget(MaterialApp(
++    theme: AdipsAppTheme.darkTheme,
++    home: Scaffold(body: SingleChildScrollView(child: Padding(
++      padding: const EdgeInsets.all(16),
++      child: child,
++    ))),
++  ));
++}
++
++void main() {
++  test('adaptiveColumns follows the width and respects min/max', () {
++    int cols(double w) =>
++        adaptiveColumns(w, minItemWidth: 230, maxColumns: 4, spacing: 16);
++    expect(cols(1200), 4);
++    expect(cols(900), 3);
++    expect(cols(600), 2);
++    expect(cols(300), 1);
++    expect(cols(0), 1);
++    expect(cols(5000), 4);
++  });
++
++  testWidgets('BalanceCard shows the headline total and other currencies',
++      (tester) async {
++    await pump(
++      tester,
++      const BalanceCard(totals: [
++        AccountSummaryTotal(currency: 'INR', totalBalance: 1234.5),
++        AccountSummaryTotal(currency: 'USD', totalBalance: 10),
++      ]),
++    );
++    expect(find.text('₹1,234.50'), findsOneWidget);
++    expect(find.text('+ \$10.00'), findsOneWidget);
++  });
++
++  testWidgets('BalanceCard with no totals shows zero in the fallback currency',
++      (tester) async {
++    await pump(tester, const BalanceCard(totals: [], fallbackCurrency: 'USD'));
++    expect(find.text('\$0.00'), findsOneWidget);
++  });
++
++  testWidgets('StatCards show income, expenses and count', (tester) async {
++    await pump(
++      tester,
++      const StatCards(
++        totalIncome: 5000,
++        totalExpenses: 1250.75,
++        totalTransactions: 42,
++      ),
++    );
++    expect(find.text('₹5,000.00'), findsOneWidget);
++    expect(find.text('₹1,250.75'), findsOneWidget);
++    expect(find.text('42'), findsOneWidget);
++  });
++
++  testWidgets('AccountCardGrid: default badge, not-in-total note, tap',
++      (tester) async {
++    AccountModel? tapped;
++    await pump(
++      tester,
++      AccountCardGrid(
++        accounts: [
++          account(id: 1, name: 'Main', isDefault: true),
++          account(id: 2, name: 'Old', balance: -50, includeInTotal: false),
++        ],
++        selectedId: 1,
++        onTap: (a) => tapped = a,
++      ),
++    );
++    expect(find.text('Default'), findsOneWidget);
++    expect(find.textContaining('not included in total'), findsOneWidget);
++
++    await tester.tap(find.text('Old'));
++    expect(tapped?.id, 2);
++  });
++
++  testWidgets('AccountCardGrid empty state offers Add account', (tester) async {
++    var added = false;
++    await pump(
++      tester,
++      AccountCardGrid(accounts: const [], onAddAccount: () => added = true),
++    );
++    await tester.tap(find.text('Add account'));
++    expect(added, isTrue);
++  });
++
++  testWidgets('dashboard widgets do not overflow on a phone-width screen',
++      (tester) async {
++    await pump(
++      tester,
++      Column(children: [
++        const BalanceCard(totals: [
++          AccountSummaryTotal(currency: 'INR', totalBalance: 98765432.1),
++        ]),
++        const SizedBox(height: 16),
++        const StatCards(
++            totalIncome: 123456789, totalExpenses: 98765, totalTransactions: 7),
++        const SizedBox(height: 16),
++        AccountCardGrid(accounts: [
++          account(id: 1, name: 'A very long account name indeed', isDefault: true),
++          account(id: 2, name: 'Cash'),
++        ]),
++      ]),
++      width: 360,
++    );
++    expect(tester.takeException(), isNull);
++  });
++}
+-- 
+2.43.0
+

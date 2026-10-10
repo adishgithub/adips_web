@@ -8,6 +8,8 @@ import '../web/auth/web_onboarding_page.dart';
 import '../web/auth/web_register_page.dart';
 import '../web/common/coming_soon_page.dart';
 import '../web/common/not_found_page.dart';
+import '../web/dashboard/dashboard_controller.dart';
+import '../web/dashboard/web_dashboard_page.dart';
 
 /// Redirects when there is no saved token: first-time visitors see
 /// /onboarding, returning ones /login. (A token that the
@@ -63,7 +65,14 @@ class AppPages {
       middlewares: [GuestGuard()],
       page: () => const WebOnboardingPage(),
     ),
-    _page('/dashboard', 'Dashboard', 'Phase 3'),
+    GetPage(
+      name: '/dashboard',
+      middlewares: [AuthGuard()],
+      // Created per visit and disposed when the route is left, so a new
+      // sign-in never sees the previous user's numbers.
+      binding: BindingsBuilder.put(() => DashboardController()),
+      page: () => const WebDashboardPage(),
+    ),
     _page('/transactions', 'Transactions', 'Phase 4'),
     _page('/accounts', 'Accounts', 'Phase 6'),
     _page('/categories', 'Categories', 'Phase 7'),
