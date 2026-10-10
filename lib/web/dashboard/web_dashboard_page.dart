@@ -55,7 +55,7 @@ class DashboardLoadingView extends StatelessWidget {
           const CircularProgressIndicator(),
           const SizedBox(height: AdipsSizes.md),
           Text(
-            'Loading your accounts… the server may take up to 30 seconds to wake up.',
+            'Loading… the server may take up to 30 seconds to wake up.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
@@ -66,9 +66,14 @@ class DashboardLoadingView extends StatelessWidget {
 }
 
 class DashboardErrorView extends StatelessWidget {
-  const DashboardErrorView(
-      {super.key, required this.message, required this.onRetry});
+  const DashboardErrorView({
+    super.key,
+    required this.message,
+    required this.onRetry,
+    this.title = 'Could not load your dashboard',
+  });
 
+  final String title;
   final String message;
   final VoidCallback onRetry;
 
@@ -84,7 +89,7 @@ class DashboardErrorView extends StatelessWidget {
             children: [
               const Icon(Icons.cloud_off_outlined, size: 48),
               const SizedBox(height: AdipsSizes.md),
-              Text('Could not load your dashboard',
+              Text(title,
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: AdipsSizes.sm),
               Text(message, textAlign: TextAlign.center),

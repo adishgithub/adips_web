@@ -10,6 +10,8 @@ import '../web/common/coming_soon_page.dart';
 import '../web/common/not_found_page.dart';
 import '../web/dashboard/dashboard_controller.dart';
 import '../web/dashboard/web_dashboard_page.dart';
+import '../web/transactions/transactions_controller.dart';
+import '../web/transactions/web_transactions_page.dart';
 
 /// Redirects when there is no saved token: first-time visitors see
 /// /onboarding, returning ones /login. (A token that the
@@ -73,7 +75,12 @@ class AppPages {
       binding: BindingsBuilder.put(() => DashboardController()),
       page: () => const WebDashboardPage(),
     ),
-    _page('/transactions', 'Transactions', 'Phase 4'),
+    GetPage(
+      name: '/transactions',
+      middlewares: [AuthGuard()],
+      binding: BindingsBuilder.put(() => TransactionsController()),
+      page: () => const WebTransactionsPage(),
+    ),
     _page('/accounts', 'Accounts', 'Phase 6'),
     _page('/categories', 'Categories', 'Phase 7'),
     _page('/transaction-types', 'Transaction Types', 'Phase 7'),

@@ -240,7 +240,7 @@ class DateRangeDropdown extends StatelessWidget {
           ]),
         ),
       ],
-      child: _DropdownBox(
+      child: DropdownBox(
           icon: Icons.calendar_today_outlined,
           label: selected?.label ?? 'All time'),
     );
@@ -283,13 +283,15 @@ class SortDropdown extends StatelessWidget {
             ]),
           ),
       ],
-      child: _DropdownBox(icon: Icons.swap_vert_rounded, label: selected.label),
+      child: DropdownBox(icon: Icons.swap_vert_rounded, label: selected.label),
     );
   }
 }
 
-class _DropdownBox extends StatelessWidget {
-  const _DropdownBox({required this.icon, required this.label});
+/// The closed look shared by every dropdown on the dashboard / transactions
+/// filter bars.
+class DropdownBox extends StatelessWidget {
+  const DropdownBox({super.key, required this.icon, required this.label});
 
   final IconData icon;
   final String label;
