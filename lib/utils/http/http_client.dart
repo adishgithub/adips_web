@@ -40,6 +40,15 @@ class ApiException implements Exception {
 class AdipsHttpHelper {
   static const String _baseUrl = 'https://adips-backend.onrender.com';
 
+  /// HTTP client used for every call. On web, `http.Client()` is the
+  /// browser client. Replaceable so tests can inject a MockClient.
+  static http.Client client = http.Client();
+
+  /// Called once when the server answers 401 to a request that carried a
+  /// token (expired/invalid session). Not called for a 401 on login, where
+  /// no token is sent. Wired in main.dart to AuthSession.expire.
+  static void Function()? onUnauthorized;
+
   /// Timeout for normal calls.
   static const Duration defaultTimeout = Duration(seconds: 15);
 
@@ -86,10 +95,9 @@ class AdipsHttpHelper {
       }) async {
     final url = Uri.parse('$_baseUrl$endpoint');
     try {
-      final response = await http
-          .post(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+      final response = await client.post(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
           .timeout(defaultTimeout);
-      return _handleResponse(response);
+      return _handleResponse(response, authed: _hasToken(cookie));
     } on TimeoutException {
       throw Exception(timeoutMessage);
     } on http.ClientException {
@@ -104,10 +112,9 @@ class AdipsHttpHelper {
       }) async {
     final url = Uri.parse('$_baseUrl$endpoint');
     try {
-      final response = await http
-          .get(url, headers: _headers(cookie: cookie))
+      final response = await client.get(url, headers: _headers(cookie: cookie))
           .timeout(timeout);
-      return _handleResponse(response);
+      return _handleResponse(response, authed: _hasToken(cookie));
     } on TimeoutException {
       throw Exception(timeoutMessage);
     } on http.ClientException {
@@ -122,10 +129,9 @@ class AdipsHttpHelper {
       }) async {
     final url = Uri.parse('$_baseUrl$endpoint');
     try {
-      final response = await http
-          .put(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+      final response = await client.put(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
           .timeout(defaultTimeout);
-      return _handleResponse(response);
+      return _handleResponse(response, authed: _hasToken(cookie));
     } on TimeoutException {
       throw Exception(timeoutMessage);
     } on http.ClientException {
@@ -140,10 +146,9 @@ class AdipsHttpHelper {
       }) async {
     final url = Uri.parse('$_baseUrl$endpoint');
     try {
-      final response = await http
-          .patch(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+      final response = await client.patch(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
           .timeout(defaultTimeout);
-      return _handleResponse(response);
+      return _handleResponse(response, authed: _hasToken(cookie));
     } on TimeoutException {
       throw Exception(timeoutMessage);
     } on http.ClientException {
@@ -157,10 +162,9 @@ class AdipsHttpHelper {
       }) async {
     final url = Uri.parse('$_baseUrl$endpoint');
     try {
-      final response = await http
-          .delete(url, headers: _headers(cookie: cookie))
+      final response = await client.delete(url, headers: _headers(cookie: cookie))
           .timeout(defaultTimeout);
-      return _handleResponse(response);
+      return _handleResponse(response, authed: _hasToken(cookie));
     } on TimeoutException {
       throw Exception(timeoutMessage);
     } on http.ClientException {
@@ -195,12 +199,31 @@ class AdipsHttpHelper {
 
   /// Parses the response and throws a readable Exception on any
   /// non-2xx status, so callers can just try/catch a single Exception type.
-  static Map<String, dynamic> _handleResponse(http.Response response) {
-    final dynamic decoded =
-    response.body.isNotEmpty ? jsonDecode(response.body) : <String, dynamic>{};
+  /// True when this call is authenticated (a token is actually sent).
+  static bool _hasToken(String? cookie) =>
+      _headers(cookie: cookie).containsKey('Authorization');
+
+  static Map<String, dynamic> _handleResponse(
+    http.Response response, {
+    required bool authed,
+  }) {
+    dynamic decoded = <String, dynamic>{};
+    if (response.body.isNotEmpty) {
+      try {
+        decoded = jsonDecode(response.body);
+      } on FormatException {
+        // Non-JSON body (e.g. an HTML 502 page while the server wakes up).
+        decoded = <String, dynamic>{};
+      }
+    }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return decoded is Map<String, dynamic> ? decoded : {'data': decoded};
+    }
+
+    // Only a 401 to a token-carrying request means "session expired".
+    if (response.statusCode == 401 && authed) {
+      onUnauthorized?.call();
     }
 
     final String message = (decoded is Map && decoded['message'] != null)

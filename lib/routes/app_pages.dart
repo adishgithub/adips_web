@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../utils/local_storage/storage_utility.dart';
 import '../web/auth/web_login_page.dart';
 import '../web/common/coming_soon_page.dart';
+import '../web/common/not_found_page.dart';
 
 /// Redirects to /login when there is no saved token. (A token that the
 /// server later rejects with 401 is handled by the data layer in Phase 2.)
@@ -13,12 +14,23 @@ class AuthGuard extends GetMiddleware {
       AdipsLocalStorage.token == null ? const RouteSettings(name: '/login') : null;
 }
 
+/// Signed-in users have no business on /login: send them to the dashboard.
+class GuestGuard extends GetMiddleware {
+  @override
+  RouteSettings? redirect(String? route) =>
+      AdipsLocalStorage.token != null ? const RouteSettings(name: '/dashboard') : null;
+}
+
 /// Route map from the web plan (section 10). Each module is replaced by
 /// its real page in the matching phase.
 class AppPages {
   AppPages._();
 
   static const initial = '/dashboard';
+
+  /// Shown for any URL that is not in [pages].
+  static final unknown =
+      GetPage<dynamic>(name: '/not-found', page: () => const NotFoundPage());
 
   static GetPage<dynamic> _page(
           String path, String title, String phase) =>
@@ -29,7 +41,11 @@ class AppPages {
       );
 
   static final pages = <GetPage<dynamic>>[
-    GetPage(name: '/login', page: () => const WebLoginPage()),
+    GetPage(
+      name: '/login',
+      middlewares: [GuestGuard()],
+      page: () => const WebLoginPage(),
+    ),
     _page('/dashboard', 'Dashboard', 'Phase 3'),
     _page('/transactions', 'Transactions', 'Phase 4'),
     _page('/accounts', 'Accounts', 'Phase 6'),

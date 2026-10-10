@@ -1,0 +1,76 @@
+diff --git a/lib/utils/http/http_client.dart b/lib/utils/http/http_client.dart
+index 813559b..486db9d 100644
+--- a/lib/utils/http/http_client.dart
++++ b/lib/utils/http/http_client.dart
+@@ -97,7 +97,7 @@ class AdipsHttpHelper {
+     try {
+       final response = await client.post(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+           .timeout(defaultTimeout);
+-      return _handleResponse(response);
++      return _handleResponse(response, authed: _hasToken(cookie));
+     } on TimeoutException {
+       throw Exception(timeoutMessage);
+     } on http.ClientException {
+@@ -114,7 +114,7 @@ class AdipsHttpHelper {
+     try {
+       final response = await client.get(url, headers: _headers(cookie: cookie))
+           .timeout(timeout);
+-      return _handleResponse(response);
++      return _handleResponse(response, authed: _hasToken(cookie));
+     } on TimeoutException {
+       throw Exception(timeoutMessage);
+     } on http.ClientException {
+@@ -131,7 +131,7 @@ class AdipsHttpHelper {
+     try {
+       final response = await client.put(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+           .timeout(defaultTimeout);
+-      return _handleResponse(response);
++      return _handleResponse(response, authed: _hasToken(cookie));
+     } on TimeoutException {
+       throw Exception(timeoutMessage);
+     } on http.ClientException {
+@@ -148,7 +148,7 @@ class AdipsHttpHelper {
+     try {
+       final response = await client.patch(url, headers: _headers(cookie: cookie), body: jsonEncode(body))
+           .timeout(defaultTimeout);
+-      return _handleResponse(response);
++      return _handleResponse(response, authed: _hasToken(cookie));
+     } on TimeoutException {
+       throw Exception(timeoutMessage);
+     } on http.ClientException {
+@@ -164,7 +164,7 @@ class AdipsHttpHelper {
+     try {
+       final response = await client.delete(url, headers: _headers(cookie: cookie))
+           .timeout(defaultTimeout);
+-      return _handleResponse(response);
++      return _handleResponse(response, authed: _hasToken(cookie));
+     } on TimeoutException {
+       throw Exception(timeoutMessage);
+     } on http.ClientException {
+@@ -199,7 +199,14 @@ class AdipsHttpHelper {
+ 
+   /// Parses the response and throws a readable Exception on any
+   /// non-2xx status, so callers can just try/catch a single Exception type.
+-  static Map<String, dynamic> _handleResponse(http.Response response) {
++  /// True when this call is authenticated (a token is actually sent).
++  static bool _hasToken(String? cookie) =>
++      _headers(cookie: cookie).containsKey('Authorization');
++
++  static Map<String, dynamic> _handleResponse(
++    http.Response response, {
++    required bool authed,
++  }) {
+     dynamic decoded = <String, dynamic>{};
+     if (response.body.isNotEmpty) {
+       try {
+@@ -214,8 +221,8 @@ class AdipsHttpHelper {
+       return decoded is Map<String, dynamic> ? decoded : {'data': decoded};
+     }
+ 
+-    if (response.statusCode == 401 &&
+-        (response.request?.headers.containsKey('Authorization') ?? false)) {
++    // Only a 401 to a token-carrying request means "session expired".
++    if (response.statusCode == 401 && authed) {
+       onUnauthorized?.call();
+     }
+ 
