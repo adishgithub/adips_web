@@ -1,17 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../core/onboarding_store.dart';
 import '../utils/local_storage/storage_utility.dart';
 import '../web/auth/web_login_page.dart';
+import '../web/auth/web_onboarding_page.dart';
+import '../web/auth/web_register_page.dart';
 import '../web/common/coming_soon_page.dart';
 import '../web/common/not_found_page.dart';
 
-/// Redirects to /login when there is no saved token. (A token that the
+/// Redirects when there is no saved token: first-time visitors see
+/// /onboarding, returning ones /login. (A token that the
 /// server later rejects with 401 is handled by the data layer in Phase 2.)
 class AuthGuard extends GetMiddleware {
   @override
   RouteSettings? redirect(String? route) =>
-      AdipsLocalStorage.token == null ? const RouteSettings(name: '/login') : null;
+      AdipsLocalStorage.token != null
+          ? null
+          : RouteSettings(
+              name: OnboardingStore.seen ? '/login' : '/onboarding');
 }
 
 /// Signed-in users have no business on /login: send them to the dashboard.
@@ -45,6 +52,16 @@ class AppPages {
       name: '/login',
       middlewares: [GuestGuard()],
       page: () => const WebLoginPage(),
+    ),
+    GetPage(
+      name: '/register',
+      middlewares: [GuestGuard()],
+      page: () => const WebRegisterPage(),
+    ),
+    GetPage(
+      name: '/onboarding',
+      middlewares: [GuestGuard()],
+      page: () => const WebOnboardingPage(),
     ),
     _page('/dashboard', 'Dashboard', 'Phase 3'),
     _page('/transactions', 'Transactions', 'Phase 4'),

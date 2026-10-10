@@ -108,13 +108,18 @@ class _WebLoginPageState extends State<WebLoginPage> {
                         style: TextStyle(color: theme.colorScheme.error)),
                   ],
                   const SizedBox(height: 24),
-                  FilledButton(
+                  ElevatedButton(
                     onPressed: _loading ? null : _submit,
                     child: _loading
-                        ? const SizedBox(
+                        ? SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: Builder(
+                              builder: (ctx) => CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: IconTheme.of(ctx).color,
+                              ),
+                            ))
                         : const Text('Sign in'),
                   ),
                   if (_loading) ...[
@@ -124,6 +129,18 @@ class _WebLoginPageState extends State<WebLoginPage> {
                         textAlign: TextAlign.center,
                         style: theme.textTheme.bodySmall),
                   ],
+                  const SizedBox(height: 16),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      const Text('New to ADIPS?'),
+                      TextButton(
+                        onPressed: () => Get.offAllNamed('/register'),
+                        child: const Text('Create account'),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
